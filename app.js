@@ -39,7 +39,7 @@ function withTeam(s) {
 
 let S = load() || fresh();
 const UI = { openPrefs: null, sel: null, pending: [], menu: false, paste: false, focusAdd: false, dlg: null };
-let needsRender = false, lastSave = 0, lastDueBeep = 0;
+let needsRender = false, lastSave = 0, lastDueBeep = 0, drag = null, suppressClickUntil = 0;
 
 function load() {
   try {
@@ -130,7 +130,7 @@ function tick() {
     }
     if (!S.halfAlerted && S.clockMs >= halfMs()) { S.halfAlerted = true; beep(2, 660); vibrate([700, 200, 700]); toast('Time is up — end the half when the ref does.'); needsRender = true; }
   }
-  if (needsRender) { needsRender = false; render(); } else paintLive();
+  if (needsRender && !(drag && drag.active)) { needsRender = false; render(); } else paintLive();
   if (now - lastSave > 1000) { save(); lastSave = now; }
 }
 function setText(sel, txt) { const e = $(sel); if (e && e.textContent !== txt) e.textContent = txt; }
@@ -304,13 +304,13 @@ function gameHTML() {
       const parts = [];
       if (empties && benchPlayers().length) parts.push(`<button class="btn" data-act="autofill">Auto-fill by position</button>`);
       if (anyField) parts.push(`<button class="btn ghost" data-act="clearField">Clear field</button>`);
-      action = parts.join('') || `<div class="hint">Tap a bench player, then a spot on the field.</div>`;
+      action = parts.join('') || `<div class="hint">Drag a bench player onto the field, or tap a player, then a spot.</div>`;
     }
   } else {
-    action = `<div class="hint">Tap a field player, then a bench player. Line up 3–4 swaps, then confirm.</div>`;
+    action = `<div class="hint">Drag a bench player onto a field player (or tap one, then the other). Line up 3–4 swaps, then confirm.</div>`;
   }
 
-  const benchHint = immediate() ? (benchPlayers().length > 5 ? 'Swipe for more · tap a player, then a spot' : 'Tap a player, then a spot') : 'Longest wait first';
+  const benchHint = immediate() ? (benchPlayers().length > 5 ? 'Swipe for more · drag a player to a spot' : 'Drag or tap a player to a spot') : 'Longest wait first';
   const legend = immediate() ? '' : '<span class="legend"><i style="background:var(--owed)"></i>behind<i style="background:var(--ahead)"></i>ahead</span>';
   return `<div class="game">${top}${subcard}
     <div class="pitchwrap"><div class="pitch">${pitchSVG()}${field}</div></div>
@@ -522,7 +522,101 @@ const FORMS = {
   }
 };
 
+/* ---------------- Drag and drop (touch, pen and mouse) ----------------
+   A press that barely moves stays a tap. Moving past 10px picks the player up; drop on a field spot, a bench player or the bench. */
+function dropTarget(cx, cy) {
+  let best = null, bestD = Infinity;
+  document.querySelectorAll('.pitch .tok').forEach(t => {
+    const r = t.querySelector('.disc').getBoundingClientRect();
+    const d = Math.hypot(cx - (r.left + r.width / 2), cy - (r.top + r.height / 2));
+    if (d < bestD && d < r.width * 0.95) { best = { el: t, type: 'spot', i: +t.dataset.i }; bestD = d; }
+  });
+  if (best) return best;
+  const el = document.elementFromPoint(cx, cy);
+  const chip = el && el.closest('.btok'); if (chip) return { el: chip, type: 'bench', pid: chip.dataset.pid };
+  const box = el && el.closest('.benchbox'); if (box) return { el: box, type: 'benchbox' };
+  return null;
+}
+function ghostPoint(e) { return { x: e.clientX, y: e.clientY - (e.pointerType === 'mouse' ? 0 : 38) }; }
+function endDrag() {
+  if (!drag) return;
+  clearTimeout(drag.timer);
+  if (drag.ghost) drag.ghost.remove();
+  if (drag.t) drag.t.classList.remove('dragsrc');
+  document.querySelectorAll('.drop').forEach(x => x.classList.remove('drop'));
+  drag = null;
+}
+function performDrop(src, tgt) {
+  if (!tgt) return;
+  const sub = !immediate();
+  if (src.kind === 'spot') {
+    if (tgt.type === 'spot') {
+      if (tgt.i === src.i) return;
+      UI.sel = { kind: 'spot', v: src.i }; H.spot({ dataset: { i: tgt.i } });
+    } else if (tgt.type === 'bench') {
+      if (sub) UI.pending = UI.pending.filter(p => ![src.pid, tgt.pid].some(x => x === p.off || x === p.on));
+      UI.sel = { kind: 'spot', v: src.i }; H.bench({ dataset: { pid: tgt.pid } });
+    } else if (tgt.type === 'benchbox') {
+      if (sub) { toast('Drop onto a bench player to line up a sub.'); return; }
+      pushHist(); S.lineup[src.i] = null; UI.sel = null; commit();
+    }
+  } else if (src.kind === 'bench') {
+    if (tgt.type === 'spot') {
+      const occupant = S.lineup[tgt.i];
+      if (sub && occupant) UI.pending = UI.pending.filter(p => ![src.pid, occupant].some(x => x === p.off || x === p.on));
+      UI.sel = { kind: 'bench', v: src.pid }; H.spot({ dataset: { i: tgt.i } });
+    }
+  }
+}
+document.addEventListener('pointerdown', e => {
+  if (S.phase !== 'game' || UI.dlg || UI.menu || drag) return;
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  const t = e.target.closest('[data-act=spot],[data-act=bench]'); if (!t) return;
+  const kind = t.dataset.act === 'bench' ? 'bench' : 'spot';
+  const pid = kind === 'bench' ? t.dataset.pid : S.lineup[+t.dataset.i];
+  if (!pid) return;
+  drag = { t, kind, pid, i: kind === 'spot' ? +t.dataset.i : null, x0: e.clientX, y0: e.clientY, id: e.pointerId, active: false, ghost: null, target: null, armed: e.pointerType !== 'touch' || kind !== 'bench', timer: 0 };
+  if (!drag.armed) { const d = drag; d.timer = setTimeout(() => { d.armed = true; }, 180); } // bench chips: hold briefly to drag in any direction; a quick sideways swipe scrolls the bench
+});
+document.addEventListener('pointermove', e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  if (!drag.active) {
+    const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
+    if (Math.hypot(dx, dy) < 10) return;
+    if (!drag.armed && Math.abs(dx) > Math.abs(dy)) { clearTimeout(drag.timer); drag = null; return; } // sideways swipe scrolls the bench
+    const disc = drag.t.querySelector('.disc'), r = disc.getBoundingClientRect();
+    const g = document.createElement('div');
+    g.className = 'dragghost' + (disc.closest('.tok.gk') ? ' gk' : '');
+    g.innerHTML = `<div class="disc" style="--d:${r.width}px">${disc.innerHTML}</div>`;
+    document.body.appendChild(g);
+    drag.ghost = g; drag.w = r.width; drag.active = true;
+    drag.t.classList.add('dragsrc');
+    UI.sel = null; try { navigator.vibrate && navigator.vibrate(12); } catch (err) { /* unsupported */ }
+  }
+  e.preventDefault();
+  const p = ghostPoint(e);
+  drag.ghost.style.transform = `translate(${p.x - drag.w / 2}px, ${p.y - drag.w / 2}px) scale(1.15)`;
+  const tgt = dropTarget(p.x, p.y);
+  const el = tgt && tgt.el;
+  if (!drag.target || drag.target.el !== el) {
+    document.querySelectorAll('.drop').forEach(x => x.classList.remove('drop'));
+    if (el && !(tgt.type === 'spot' && tgt.i === drag.i) && !(tgt.type === 'bench' && tgt.pid === drag.pid)) el.classList.add('drop');
+  }
+  drag.target = tgt;
+}, { passive: false });
+document.addEventListener('pointerup', e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  if (!drag.active) { drag = null; return; }
+  const p = ghostPoint(e), src = { kind: drag.kind, pid: drag.pid, i: drag.i }, tgt = dropTarget(p.x, p.y);
+  suppressClickUntil = Date.now() + 120;
+  endDrag(); performDrop(src, tgt); render();
+});
+document.addEventListener('touchmove', e => { if (drag && (drag.active || drag.armed) && e.cancelable) e.preventDefault(); }, { passive: false });
+document.addEventListener('pointercancel', e => { if (drag && e.pointerId === drag.id) endDrag(); });
+document.addEventListener('contextmenu', e => { if (drag) e.preventDefault(); });
+
 document.addEventListener('click', e => {
+  if (Date.now() < suppressClickUntil) { e.preventDefault(); e.stopPropagation(); return; }
   const t = e.target.closest('[data-act]'); if (!t) return;
   if (t.dataset.act === 'closeMenu' && t.classList.contains('scrim') && e.target.closest('[data-stop]')) return;
   const fn = H[t.dataset.act]; if (fn) { e.preventDefault(); fn(t, e); }
