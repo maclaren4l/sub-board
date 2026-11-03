@@ -8,8 +8,9 @@ A sideline tool for a youth soccer coach: set your starting 11 on a top-down pit
 2. **Lineup** – drag a bench player onto a spot on the field (or tap the player, then the spot). Drag one field player onto another to swap them, or onto the bench to take them off. On the bench, swipe sideways to scroll; press and hold a chip for a moment to drag it in any direction. Tap two field players to swap them. "Auto-fill by position" uses the tags to fill empty spots.
 3. **Kick off** – starts the half clock. Tap **Start sub timer** whenever you want the next sub window to begin. At zero the card turns orange and beeps.
 4. **Make subs** – drag a bench player onto the field player coming off (or tap one, then the other). Repeat for 3–4 swaps; numbers show the pairs. Tap **Make N subs** when the ref lets you. The sub takes the same spot. **Undo** is in the toast and the ↶ button.
-5. Bench is sorted longest-wait first. Minute badges: teal = behind on playing time, amber = ahead.
-6. **End half** → halftime lineup → **Kick off 2nd half** → **End half** shows minutes played per player.
+5. **Goalie** – set per half. During a half the goalie has a padlock; tapping or dragging her asks "Swap the goalie?" first (for an injury). At halftime the goalie spot is cleared so you choose the 2nd-half goalie, and the app warns if you pick the same player again.
+6. Bench is sorted longest-wait first. Minute badges: teal = behind on playing time, amber = ahead.
+7. **End half** → halftime lineup → **Kick off 2nd half** → **End half** shows minutes played per player.
 
 The game is saved on the device, so a reload or phone lock won't lose it. **Game settings (⚙)** has formation, late arrivals, and "start over".
 

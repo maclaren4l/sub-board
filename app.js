@@ -30,7 +30,7 @@ const fresh = () => withTeam({
   v: 1, seeded: 1, phase: 'setup', nextId: 1, players: [], stats: {},
   settings: { formation: '4-3-3', halfMin: 35, subMin: 5, autoStart: false, color: COLORS[0], kitv: 2 },
   lineup: Array(11).fill(null), half: 1, halfState: 'ready', clockMs: 0, lastTick: Date.now(),
-  sub: { state: 'idle', ms: 0, silenced: false }, halfAlerted: false, history: []
+  sub: { state: 'idle', ms: 0, silenced: false }, halfAlerted: false, history: [], goalies: {}
 });
 function withTeam(s) {
   for (const name of TEAM) { const id = 'p' + s.nextId++; s.players.push({ id, name, present: true, prefs: [] }); s.stats[id] = { played: 0, bench: 0 }; }
@@ -253,7 +253,8 @@ function gameHTML() {
     const p = P(pid), pi = pairIdx(pid);
     const cls = ['tok', s[0] === 'GK' ? 'gk' : '', isSel ? 'sel' : '', pi >= 0 ? 'off' : '', pref.trim()].filter(Boolean).join(' ');
     const badge = S.halfState === 'ready' && !st(pid).played ? '' : `<i class="min ${fairness(pid, avg)}" data-badge="${pid}">${mins(st(pid).played)}m</i>`;
-    return `<button class="${cls}" style="${pos}" data-act="spot" data-i="${i}" aria-label="${esc(p.name)}, ${ROLE_NAME[s[0]]}"><span class="disc">${esc(initials(p.name))}${badge}${pi >= 0 ? `<i class="pair">${pi + 1}</i>` : ''}</span><span class="nm">${esc(p.name)}</span></button>`;
+    const lock = s[0] === 'GK' && !immediate() ? LOCK : '';
+    return `<button class="${cls}" style="${pos}" data-act="spot" data-i="${i}" aria-label="${esc(p.name)}, ${ROLE_NAME[s[0]]}"><span class="disc">${esc(initials(p.name))}${badge}${lock}${pi >= 0 ? `<i class="pair">${pi + 1}</i>` : ''}</span><span class="nm">${esc(p.name)}</span></button>`;
   }).join('');
 
   // ----- bench
@@ -268,8 +269,9 @@ function gameHTML() {
   const running = S.halfState === 'running', paused = S.halfState === 'paused', ready = S.halfState === 'ready';
   const rem = halfMs() - S.clockMs;
   const need = Math.min(11, present().length), left = need - S.lineup.filter(Boolean).length;
-  const lineupStatus = left > 0 ? `<b class="need">${left} left to place</b>` : '<b class="done">Lineup set</b>';
-  const status = ready ? (S.half === 1 ? '' : 'Halftime · ') + lineupStatus : running ? 'Live' : 'Paused';
+  const pickGK = ready && S.half === 2 && !S.lineup[0];
+  const lineupStatus = pickGK ? '<b class="need">Pick a goalie</b>' : left > 0 ? `<b class="need">${left} left to place</b>` : '<b class="done">Lineup set</b>';
+  const status = ready ? lineupStatus : running ? 'Live' : 'Paused';
   const primary = ready ? `<button class="btn go primary" data-act="kickoff">Kick off${S.half === 2 ? ' 2nd half' : ''}</button>`
     : running ? `<button class="btn primary" data-act="pause">Pause clock</button>` : `<button class="btn go primary" data-act="resume">Resume clock</button>`;
   const endBtn = ready ? '' : `<button class="btn ${rem < 0 ? 'flare' : 'ghost'} small" data-act="endHalf">End half</button>`;
@@ -336,10 +338,13 @@ function summaryHTML() {
   return `<div class="setup summary"><div class="scroll">
     <h1>Full time</h1>
     <p class="lede">Average playing time was ${mins(avg)} min. Here is how the minutes landed.</p>
+    ${[1, 2].some(h => S.goalies[h] && P(S.goalies[h])) ? `<p class="lede" style="margin-top:-10px">${[1, 2].filter(h => S.goalies[h] && P(S.goalies[h])).map(h => `${h === 1 ? '1st' : '2nd'} half goalie: <strong>${esc(P(S.goalies[h]).name)}</strong>`).join(', ')}</p>` : ''}
     <div class="list">${rows.map(p => `<div class="row"><span class="nm2">${esc(p.name)}</span><span class="mins">${mins(st(p.id).played)} min<small>${mins(st(p.id).bench)} on bench</small></span><div class="bar"><i style="width:${st(p.id).played / max * 100}%"></i></div></div>`).join('')}</div>
   </div><div class="cta"><button class="btn go" data-act="newGame">Start a new game</button><div style="height:8px"></div><button class="btn ghost" data-act="reopen">Reopen this game</button></div></div>`;
 }
 
+const confirmGoalie = pid => ask({ title: 'Swap the goalie?', body: `${P(pid).name} is the goalie for this half. Only swap for an injury or if she asks.`, ok: 'Swap goalie', cancel: 'Keep her in goal' });
+const LOCK = '<i class="lock" aria-label="Goalie for this half"><svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="5.5" width="8" height="6" rx="1.2"/><path d="M4 5.5V4a2 2 0 014 0v1.5"/></svg></i>';
 function lateOptions() { return S.players.filter(p => !p.present); }
 function lateFormHTML() {
   const absent = lateOptions();
@@ -401,8 +406,9 @@ const H = {
   toLineup() { unlockAudio(); S.phase = 'game'; S.halfState = 'ready'; S.half = 1; S.clockMs = 0; UI.sel = null; UI.pending = []; commit(); },
 
   // lineup + subs
-  spot(t) {
+  async spot(t) {
     const i = +t.dataset.i, pid = S.lineup[i], sel = UI.sel;
+    if (!immediate() && i === 0 && pid && pairIdx(pid) < 0 && !(await confirmGoalie(pid))) { UI.sel = null; commit(); return; }
     if (immediate()) {
       if (!sel) UI.sel = { kind: 'spot', v: i };
       else if (sel.kind === 'spot') {
@@ -451,7 +457,8 @@ const H = {
     const sp = spots(), free = present().filter(p => !S.lineup.includes(p.id));
     const empty = sp.map((s, i) => i).filter(i => !S.lineup[i]);
     const prio = { GK: 0, LW: 1, RW: 2, FWD: 3, MID: 4, DEF: 5 };
-    const cands = i => free.filter(p => p.prefs.includes(sp[i][0])).sort((a, b) => a.prefs.length - b.prefs.length || st(a.id).played - st(b.id).played);
+    const prevGK = S.half === 2 ? S.goalies[1] : null;
+    const cands = i => free.filter(p => p.prefs.includes(sp[i][0]) && !(sp[i][0] === 'GK' && p.id === prevGK)).sort((a, b) => a.prefs.length - b.prefs.length || st(a.id).played - st(b.id).played);
     const order = empty.filter(i => cands(i).length).sort((a, b) => cands(a).length - cands(b).length || prio[sp[a][0]] - prio[sp[b][0]] || a - b);
     const owner = {}; // player id -> spot index
     const assign = (i, seen) => {
@@ -464,7 +471,7 @@ const H = {
     order.forEach(i => assign(i, new Set()));
     for (const [pid, i] of Object.entries(owner)) S.lineup[i] = pid;
     const rest = free.filter(p => !S.lineup.includes(p.id)).sort((a, b) => st(a.id).played - st(b.id).played);
-    sp.forEach((s, i) => { if (!S.lineup[i] && rest.length) S.lineup[i] = rest.shift().id; });
+    sp.forEach((s, i) => { if (!S.lineup[i] && rest.length) { const k = s[0] === 'GK' && rest.length > 1 && rest[0].id === prevGK ? 1 : 0; S.lineup[i] = rest.splice(k, 1)[0].id; } });
     commit();
   },
   clearField() { pushHist(); S.lineup = Array(11).fill(null); UI.sel = null; commit(); },
@@ -477,7 +484,12 @@ const H = {
   async kickoff() {
     unlockAudio();
     const need = Math.min(11, present().length), have = S.lineup.filter(Boolean).length;
+    if (!S.lineup[0] && need) { if (await ask({ title: 'No goalie yet', body: `Choose who plays goalie in the ${S.half === 1 ? '1st' : '2nd'} half, then kick off.`, ok: 'Pick a goalie', cancel: 'Kick off anyway' })) return; }
+    else if (S.half === 2 && S.goalies[1] && S.lineup[0] === S.goalies[1]) {
+      if (await ask({ title: 'Same goalie?', body: `${P(S.goalies[1]).name} played goalie in the 1st half. Start her in goal again?`, ok: 'Pick someone else', cancel: 'Same goalie' })) return;
+    }
     if (have < need && !(await ask({ title: 'Lineup not full', body: `Only ${have} of ${need} spots are filled. Kick off anyway?`, ok: 'Kick off' }))) return;
+    S.goalies[S.half] = S.lineup[0] || null;
     S.halfState = 'running'; S.lastTick = Date.now(); S.halfAlerted = false; UI.sel = null; UI.pending = [];
     S.sub = { state: S.settings.autoStart ? 'running' : 'idle', ms: 0, silenced: false };
     keepAwake(); commit();
@@ -488,7 +500,7 @@ const H = {
     const first = S.half === 1;
     if (!(await ask({ title: first ? 'End the first half?' : 'End the game?', body: first ? `The clock stops at ${fmt(S.clockMs)}. You can reset your lineup before the second half.` : 'You will see how many minutes each player got.', ok: first ? 'End half' : 'End game' }))) return;
     tick(); UI.sel = null; UI.pending = []; S.sub = { state: 'idle', ms: 0, silenced: false };
-    if (first) { S.half = 2; S.halfState = 'ready'; S.clockMs = 0; S.halfAlerted = false; } else { S.phase = 'summary'; S.halfState = 'paused'; }
+    if (first) { S.half = 2; S.halfState = 'ready'; S.clockMs = 0; S.halfAlerted = false; if (S.lineup[0]) { S.goalies[1] = S.goalies[1] || S.lineup[0]; pushHist(); S.lineup[0] = null; } } else { S.phase = 'summary'; S.halfState = 'paused'; }
     commit();
   },
   reopen() { S.phase = 'game'; S.halfState = 'paused'; S.lastTick = Date.now(); commit(); },
@@ -562,9 +574,10 @@ function endDrag() {
   document.querySelectorAll('.drop').forEach(x => x.classList.remove('drop'));
   drag = null;
 }
-function performDrop(src, tgt) {
+async function performDrop(src, tgt) {
   if (!tgt) return;
   const sub = !immediate();
+  if (sub && src.kind === 'spot' && src.i === 0 && !(tgt.type === 'spot' && tgt.i === 0) && !(await confirmGoalie(src.pid))) return;
   if (src.kind === 'spot') {
     if (tgt.type === 'spot') {
       if (tgt.i === src.i) return;
@@ -625,7 +638,7 @@ document.addEventListener('pointerup', e => {
   if (!drag.active) { drag = null; return; }
   const p = ghostPoint(e), src = { kind: drag.kind, pid: drag.pid, i: drag.i }, tgt = dropTarget(p.x, p.y);
   suppressClickUntil = Date.now() + 120;
-  endDrag(); performDrop(src, tgt); render();
+  endDrag(); Promise.resolve(performDrop(src, tgt)).finally(render);
 });
 document.addEventListener('touchmove', e => { if (drag && (drag.active || drag.armed) && e.cancelable) e.preventDefault(); }, { passive: false });
 document.addEventListener('pointercancel', e => { if (drag && e.pointerId === drag.id) endDrag(); });

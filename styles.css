@@ -261,3 +261,7 @@ input, textarea { font: inherit; font-size: 16px; color: var(--ink); -webkit-use
 .tok.drop .disc { outline: 4px solid #fff; outline-offset: 1px; transform: scale(1.15); }
 .btok.drop .disc { outline: 4px solid var(--ink); outline-offset: 1px; transform: scale(1.12); }
 .benchbox.drop { box-shadow: inset 0 0 0 3px var(--go); }
+
+.lock { position: absolute; left: -8px; bottom: -5px; width: 24px; height: 24px; border-radius: 50%; background: var(--ink); display: grid; place-items: center; box-shadow: 0 0 0 2px #fff; }
+.lock svg { width: 14px; height: 14px; fill: #fff; stroke: #fff; stroke-width: 1.4; }
+.lock svg path { fill: none; }
