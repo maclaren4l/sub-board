@@ -340,6 +340,16 @@ function summaryHTML() {
   </div><div class="cta"><button class="btn go" data-act="newGame">Start a new game</button><div style="height:8px"></div><button class="btn ghost" data-act="reopen">Reopen this game</button></div></div>`;
 }
 
+function lateOptions() { return S.players.filter(p => !p.present); }
+function lateFormHTML() {
+  const absent = lateOptions();
+  if (!absent.length) return `<form class="latefm" data-form="late" autocomplete="off"><div class="addrow"><input name="n" placeholder="New player's name" aria-label="New player's name" autocapitalize="words"><button class="btn" type="submit">Add to bench</button></div></form>`;
+  return `<form class="latefm" data-form="late" autocomplete="off"><div class="addrow">
+    <select name="pid" aria-label="Player who arrived late"><option value="">Choose a player</option>${absent.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('')}<option value="__new">Someone not on the roster…</option></select>
+    <button class="btn" type="submit">Add to bench</button></div>
+    <input class="newname" name="n" placeholder="New player's name" aria-label="New player's name" autocapitalize="words" hidden></form>`;
+}
+
 function renderSheet() {
   const root = $('#sheet-root'), dlg = $('#dlg-root');
   root.innerHTML = UI.menu && S.phase === 'game' ? `<div class="scrim" data-act="closeMenu"><div class="sheet" role="dialog" aria-label="Game settings" data-stop>
@@ -351,8 +361,8 @@ function renderSheet() {
       <div class="field-row"><div class="lbl">Kit color</div>${swatches()}</div>
     </div>
     <div class="panel"><div class="field-row"><div class="lbl">Formation<small>Players keep their position group when you switch.</small></div></div><div class="field-row" style="padding-top:0">${formationSeg()}</div></div>
-    <div class="panel"><div class="field-row"><div class="lbl">Late arrival</div></div>
-      <form class="addrow" data-form="late" autocomplete="off" style="padding-bottom:12px"><input name="n" placeholder="Player name" aria-label="Late player name" autocapitalize="words"><button class="btn" type="submit">Add to bench</button></form></div>
+    <div class="panel"><div class="field-row"><div class="lbl">Late arrival<small>${lateOptions().length ? 'Pick who just showed up.' : 'Everyone on the roster is here. Add someone new:'}</small></div></div>
+      ${lateFormHTML()}</div>
     <button class="btn danger wide" data-act="newGame">End game and start over</button>
   </div></div>` : '';
   const d = UI.dlg;
@@ -517,7 +527,13 @@ const FORMS = {
   add(f) { const i = f.elements.n; addPlayers([i.value]); UI.focusAdd = true; commit(); },
   paste(f) { addPlayers(f.elements.t.value.split(/[\n,;]+/)); UI.paste = false; commit(); },
   late(f) {
-    const name = f.elements.n.value.trim(); if (!name) return;
+    const sel = f.elements.pid, pid = sel ? sel.value : '__new';
+    if (pid && pid !== '__new') {
+      const p = P(pid); if (!p) return;
+      p.present = true; UI.menu = false; commit(); toast(`${p.name} added to the bench`); return;
+    }
+    if (sel && !pid) { sel.focus(); return; } // nothing chosen yet
+    const name = f.elements.n.value.trim(); if (!name) { f.elements.n.focus(); return; }
     addPlayers([name]); UI.menu = false; commit(); toast(`${name} added to the bench`);
   }
 };
@@ -620,6 +636,10 @@ document.addEventListener('click', e => {
   const t = e.target.closest('[data-act]'); if (!t) return;
   if (t.dataset.act === 'closeMenu' && t.classList.contains('scrim') && e.target.closest('[data-stop]')) return;
   const fn = H[t.dataset.act]; if (fn) { e.preventDefault(); fn(t, e); }
+});
+document.addEventListener('change', e => {
+  const sel = e.target.closest && e.target.closest('select[name=pid]'); if (!sel) return;
+  const box = sel.form.elements.n; box.hidden = sel.value !== '__new'; if (!box.hidden) box.focus();
 });
 document.addEventListener('submit', e => {
   const f = e.target.closest('form[data-form]'); if (!f) return;
