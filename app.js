@@ -82,7 +82,8 @@ function benchPlayers() {
     .sort((a, b) => st(b.id).bench - st(a.id).bench || st(a.id).played - st(b.id).played || a.name.localeCompare(b.name));
 }
 const pairIdx = pid => UI.pending.findIndex(p => p.off === pid || p.on === pid);
-function pushHist() { S.history.push(S.lineup.slice()); if (S.history.length > 25) S.history.shift(); }
+// Undo snapshots hold the formation too, since lineup slots are positional. The stack is emptied at kickoff and at halftime so Undo never reaches back across them.
+function pushHist() { S.history.push({ lineup: S.lineup.slice(), formation: S.settings.formation }); if (S.history.length > 25) S.history.shift(); }
 // Whoever is in goal during a live half is that half's goalie (an injury swap, or undoing one), so the summary and the 2nd-half "same goalie" check stay right.
 function syncGoalie() { if (!immediate() && S.lineup[0]) S.goalies[S.half] = S.lineup[0]; }
 function place(pid, i) { const at = S.lineup.indexOf(pid); if (at >= 0) S.lineup[at] = null; S.lineup[i] = pid; }
@@ -498,13 +499,15 @@ const H = {
       } else { pushHist(); place(sel.v, i); UI.sel = null; }
     } else {
       const pi = pairIdx(pid);
-      if (pid && pi >= 0) UI.pending.splice(pi, 1);
+      if (pid && sel && sel.kind === 'spot' && sel.v !== i) {
+        // Moving one field player onto another swaps their spots. Queued subs are tracked by player, so they follow along (and are not cancelled).
+        pushHist(); [S.lineup[i], S.lineup[sel.v]] = [S.lineup[sel.v], S.lineup[i]]; UI.sel = null;
+      }
+      else if (pid && pi >= 0) UI.pending.splice(pi, 1);
       else if (!pid) { if (sel && sel.kind === 'bench') { pushHist(); place(sel.v, i); UI.sel = null; } }
       else if (sel && sel.kind === 'bench') { UI.pending.push({ off: pid, on: sel.v }); UI.sel = null; }
-      else if (sel && sel.kind === 'spot') {
-        if (sel.v === i) UI.sel = null;
-        else { pushHist(); [S.lineup[i], S.lineup[sel.v]] = [S.lineup[sel.v], S.lineup[i]]; UI.sel = null; }
-      } else UI.sel = { kind: 'spot', v: i };
+      else if (sel && sel.kind === 'spot') UI.sel = null; // the selected spot tapped again
+      else UI.sel = { kind: 'spot', v: i };
     }
     syncGoalie(); commit();
   },
@@ -559,7 +562,10 @@ const H = {
   clearField() { pushHist(); S.lineup = Array(11).fill(null); UI.sel = null; commit(); },
   undo() {
     const h = S.history.pop(); if (!h) return;
-    S.lineup = h; UI.sel = null; UI.pending = []; syncGoalie(); commit();
+    // Games saved by an earlier build stored a bare lineup array
+    S.lineup = Array.isArray(h) ? h : h.lineup;
+    if (!Array.isArray(h) && FORMATIONS[h.formation]) S.settings.formation = h.formation;
+    UI.sel = null; UI.pending = []; syncGoalie(); commit();
   },
 
   // clock
@@ -572,6 +578,7 @@ const H = {
     }
     if (have < need && !(await ask({ title: 'Lineup not full', body: `Only ${have} of ${need} spots are filled. Kick off anyway?`, ok: 'Kick off' }))) return;
     S.goalies[S.half] = S.lineup[0] || null;
+    S.history = []; // Undo only reaches back to the start of play
     S.halfState = 'running'; S.lastTick = Date.now(); S.halfAlerted = false; UI.sel = null; UI.pending = [];
     S.sub = { state: S.settings.autoStart ? 'running' : 'idle', ms: 0, silenced: false };
     keepAwake(); commit();
@@ -581,7 +588,7 @@ const H = {
   async endHalf() {
     const first = S.half === 1;
     if (!(await ask({ title: first ? 'End the first half?' : 'End the game?', body: first ? `The clock stops at ${fmt(S.clockMs)}. You can reset your lineup before the second half.` : 'You will see how many minutes each player got.', ok: first ? 'End half' : 'End game' }))) return;
-    tick(); UI.sel = null; UI.pending = []; S.sub = { state: 'idle', ms: 0, silenced: false };
+    tick(); UI.sel = null; UI.pending = []; S.sub = { state: 'idle', ms: 0, silenced: false }; S.history = [];
     if (first) { S.half = 2; S.halfState = 'ready'; S.clockMs = 0; S.halfAlerted = false; if (S.lineup[0]) { S.goalies[1] = S.goalies[1] || S.lineup[0]; pushHist(); S.lineup[0] = null; } } else { S.phase = 'summary'; S.halfState = 'paused'; }
     commit();
   },
@@ -609,6 +616,7 @@ const H = {
 };
 
 function changeFormation(f) {
+  if (f === S.settings.formation) return;
   pushHist();
   const oldSp = spots(); S.settings.formation = f;
   const pool = {}; ROLES.forEach(r => { pool[r] = []; });
