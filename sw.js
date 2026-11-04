@@ -1,5 +1,5 @@
 // Offline cache for Sub Board. Bump VERSION whenever you change any file so phones pick up the update.
-const VERSION = 'sub-board-v15';
+const VERSION = 'sub-board-v16';
 const FILES = [
   './', './index.html', './styles.css', './app.js', './manifest.webmanifest',
   './icons/icon-192.png', './icons/icon-512.png', './icons/apple-touch-icon.png'

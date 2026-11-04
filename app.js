@@ -86,6 +86,7 @@ const pairIdx = pid => UI.pending.findIndex(p => p.off === pid || p.on === pid);
 function pushHist() { S.history.push({ lineup: S.lineup.slice(), formation: S.settings.formation }); if (S.history.length > 25) S.history.shift(); }
 // Whoever is in goal during a live half is that half's goalie (an injury swap, or undoing one), so the summary and the 2nd-half "same goalie" check stay right.
 function syncGoalie() { if (!immediate() && S.lineup[0]) S.goalies[S.half] = S.lineup[0]; }
+function swapSpots(a, b) { pushHist(); [S.lineup[a], S.lineup[b]] = [S.lineup[b], S.lineup[a]]; UI.sel = null; }
 function place(pid, i) { const at = S.lineup.indexOf(pid); if (at >= 0) S.lineup[at] = null; S.lineup[i] = pid; }
 function addPlayers(names) {
   for (const raw of names) {
@@ -151,7 +152,7 @@ function tick() {
   if (needsRender && !(drag && drag.active)) { needsRender = false; render(); } else paintLive();
   if (now - lastSave > 1000) { save(); lastSave = now; }
 }
-function setText(sel, txt) { const e = $(sel); if (e && e.textContent !== txt) e.textContent = txt; }
+function setText(sel, txt) { const e = typeof sel === 'string' ? $(sel) : sel; if (e && e.textContent !== txt) e.textContent = txt; }
 function paintLive() {
   if (S.phase !== 'game') return;
   const rem = halfMs() - S.clockMs;
@@ -174,9 +175,8 @@ function paintLive() {
     const id = b.dataset.badge, f = fairness(id, avg), v = f + '|' + chipInner(id, f);
     if (b.dataset.v !== v) { b.dataset.v = v; b.innerHTML = chipInner(id, f); b.className = ('mn ' + f).trim(); }
   });
-  document.querySelectorAll('[data-wait]').forEach(w => setText2(w, waitText(w.dataset.wait)));
+  document.querySelectorAll('[data-wait]').forEach(w => setText(w, waitText(w.dataset.wait)));
 }
-const setText2 = (e, txt) => { if (e.textContent !== txt) e.textContent = txt; };
 
 /* ---------------- Rendering ---------------- */
 // Pick readable text for the kit color, and a keeper color that never matches the kit (yellow, or magenta if the kit is yellow/green).
@@ -495,14 +495,12 @@ const H = {
       if (!sel) UI.sel = { kind: 'spot', v: i };
       else if (sel.kind === 'spot') {
         if (sel.v === i) UI.sel = null;
-        else { pushHist(); [S.lineup[i], S.lineup[sel.v]] = [S.lineup[sel.v], S.lineup[i]]; UI.sel = null; }
+        else swapSpots(i, sel.v);
       } else { pushHist(); place(sel.v, i); UI.sel = null; }
     } else {
       const pi = pairIdx(pid);
-      if (pid && sel && sel.kind === 'spot' && sel.v !== i) {
-        // Moving one field player onto another swaps their spots. Queued subs are tracked by player, so they follow along (and are not cancelled).
-        pushHist(); [S.lineup[i], S.lineup[sel.v]] = [S.lineup[sel.v], S.lineup[i]]; UI.sel = null;
-      }
+      // Moving one field player onto another swaps their spots. Queued subs are tracked by player, so they follow along (and are not cancelled).
+      if (pid && sel && sel.kind === 'spot' && sel.v !== i) swapSpots(i, sel.v);
       else if (pid && pi >= 0) UI.pending.splice(pi, 1);
       else if (!pid) { if (sel && sel.kind === 'bench') { pushHist(); place(sel.v, i); UI.sel = null; } }
       else if (sel && sel.kind === 'bench') { UI.pending.push({ off: pid, on: sel.v }); UI.sel = null; }
