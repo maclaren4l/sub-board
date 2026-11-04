@@ -25,7 +25,7 @@ Published with GitHub Pages from the root of `main` on `maclaren4l/sub-board` (h
 There are no tests, so changes get checked by driving the served app in headless Chrome (`puppeteer-core` pointed at the installed Chrome, a fresh browser context per run so `localStorage` starts empty; keep the scripts outside the repo). Use `touchscreen` taps and `isMobile`/`hasTouch` viewports of 393x852, 852x393 and 1180x820 to cover portrait, phone landscape and iPad. Two things make this practical:
 
 - **Fake the clock.** Inject `Date.now = () => realNow + window.__off` with `evaluateOnNewDocument`, then bump `__off` and wait ~700 ms for the 250 ms tick to credit "10 minutes" without waiting. `window.__subBoard.state` gives the lineup, goalies and per-player stats to assert against.
-- **Wait out the undo toast.** `#toast.show` sits over the middle of the dock for 9 s after "N subs made" (with Undo) and 4 s after other toasts, so a tap on Kick off or ••• right after one lands on the toast and silently does nothing. It also carries over halftime. Wait for `#toast.show` to disappear before tapping dock buttons.
+- **The toast floats above the dock.** `#toast` is `position: fixed`; `placeToast()` sets `--tx` / `--tb` from the `.dockwrap` rect so it sits 8 px above the dock, centred over it (so it also works in the landscape column), and `render()` re-places it. It never covers a dock button. It stays up 9 s after "N subs made" (with Undo) and 4 s after other toasts. `hideToast()` clears it when a half ends and when ••• opens (the menu opens in the same spot). Keep new dock-adjacent UI clear of that strip.
 
 ## Gotchas when changing things
 

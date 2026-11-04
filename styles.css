@@ -362,7 +362,7 @@ input, textarea { font: inherit; font-size: 16px; color: var(--ink); -webkit-use
 .dialog p { margin: 0 0 16px; color: var(--muted); line-height: 1.4; }
 .dialog .row { display: flex; gap: 8px; }
 .dialog .btn { flex: 1; }
-#toast { position: fixed; left: 50%; bottom: max(16px, calc(env(safe-area-inset-bottom) + 10px)); transform: translate(-50%, 20px); opacity: 0; pointer-events: none; z-index: 50; background: var(--ink); color: #fff; padding: 8px 8px 8px 16px; border-radius: 99px; font-weight: 700; display: flex; gap: 12px; align-items: center; transition: opacity .15s, transform .15s; white-space: nowrap; }
+#toast { position: fixed; left: var(--tx, 50%); bottom: var(--tb, max(16px, calc(env(safe-area-inset-bottom) + 10px))); transform: translate(-50%, 20px); opacity: 0; pointer-events: none; z-index: 50; background: var(--ink); color: #fff; padding: 8px 8px 8px 16px; border-radius: 99px; font-weight: 700; display: flex; gap: 12px; align-items: center; transition: opacity .15s, transform .15s; white-space: nowrap; }
 #toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
 #toast button { border: 0; border-radius: 99px; background: #fff; color: var(--ink); font-weight: 800; min-height: 34px; padding: 0 14px; }
 

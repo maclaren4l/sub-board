@@ -222,6 +222,7 @@ function render() {
   keepFields(app, () => { app.innerHTML = S.phase === 'setup' ? setupHTML() : S.phase === 'summary' ? summaryHTML() : gameHTML(); });
   const sc2 = $('.scroll'); if (sc2) sc2.scrollTop = top;
   renderSheet();
+  if ($('#toast').classList.contains('show')) placeToast();
   if (UI.focusAdd) { UI.focusAdd = false; const i = $('#addname'); if (i) i.focus(); }
   paintLive();
 }
@@ -460,10 +461,17 @@ function renderSheet() {
 // callers where "cancel" means "go ahead" must test `=== false` rather than falsiness.
 function ask(o) { return new Promise(res => { if (UI.dlg) UI.dlg.res(null); UI.dlg =Object.assign({ ok: 'OK', cancel: 'Cancel', danger: false }, o, { res }); renderSheet(); }); }
 let toastTimer = 0;
+// On the game screen the toast floats just above the dock (centred over it, so it also works in the landscape column) instead of covering its buttons.
+function placeToast() {
+  const t = $('#toast'), d = $('.dockwrap');
+  if (d) { const r = d.getBoundingClientRect(); t.style.setProperty('--tx', (r.left + r.width / 2) + 'px'); t.style.setProperty('--tb', (innerHeight - r.top + 8) + 'px'); }
+  else { t.style.removeProperty('--tx'); t.style.removeProperty('--tb'); }
+}
+function hideToast() { clearTimeout(toastTimer); $('#toast').classList.remove('show'); }
 function toast(msg, withUndo) {
   const t = $('#toast');
   t.innerHTML = `<span>${esc(msg)}</span>${withUndo ? '<button data-act="undo">Undo</button>' : ''}`;
-  t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), withUndo ? 9000 : 4000);
+  placeToast(); t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), withUndo ? 9000 : 4000);
 }
 
 /* ---------------- Actions ---------------- */
@@ -586,7 +594,7 @@ const H = {
   async endHalf() {
     const first = S.half === 1;
     if (!(await ask({ title: first ? 'End the first half?' : 'End the game?', body: first ? `The clock stops at ${fmt(S.clockMs)}. You can reset your lineup before the second half.` : 'You will see how many minutes each player got.', ok: first ? 'End half' : 'End game' }))) return;
-    tick(); UI.sel = null; UI.pending = []; S.sub = { state: 'idle', ms: 0, silenced: false }; S.history = [];
+    tick(); hideToast(); UI.sel = null; UI.pending = []; S.sub = { state: 'idle', ms: 0, silenced: false }; S.history = [];
     if (first) { S.half = 2; S.halfState = 'ready'; S.clockMs = 0; S.halfAlerted = false; if (S.lineup[0]) { S.goalies[1] = S.goalies[1] || S.lineup[0]; pushHist(); S.lineup[0] = null; } } else { S.phase = 'summary'; S.halfState = 'paused'; }
     commit();
   },
@@ -599,7 +607,7 @@ const H = {
 
   // menu + dialogs
   menu() { UI.menu = true; renderSheet(); },
-  more() { UI.more = !UI.more; render(); },
+  more() { UI.more = !UI.more; if (UI.more) hideToast(); render(); }, // the menu opens where the toast floats
   closeMore() { UI.more = false; render(); },
   moreDo(t) { const fn = H[t.dataset.fn]; UI.more = false; render(); if (fn) fn(t); }, // dock ••• menu items reuse the regular handlers
   lateOpen() { UI.menu = true; renderSheet(); const f = $('.latefm'); if (f) f.scrollIntoView({ block: 'center' }); },
