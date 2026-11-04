@@ -19,6 +19,9 @@ const FORMATIONS = {
   '4-2-3-1': [['GK',50,89],['DEF',14,68],['DEF',37,71],['DEF',63,71],['DEF',86,68],['MID',34,58],['MID',66,58],['LW',16,39],['MID',50,37],['RW',84,39],['FWD',50,17]]
 };
 
+const STALE_MS = 15 * 60e3; // a "running" game saved longer ago than this resumes paused
+const CIRC = 2 * Math.PI * 40; // sub-timer ring circumference (r=40 in a 96 viewBox)
+
 const SAMPLE = ['Ava', 'Mia', 'Zoe', 'Lily', 'Emma', 'Chloe', 'Nora', 'Ruby', 'Ella', 'Grace', 'Maya', 'Ivy', 'Sofia', 'Layla', 'Hazel', 'Piper'];
 
 /* ---------------- State ---------------- */
@@ -30,7 +33,7 @@ const fresh = () => withTeam({
   v: 1, seeded: 1, phase: 'setup', nextId: 1, players: [], stats: {},
   settings: { formation: '4-3-3', halfMin: 35, subMin: 5, autoStart: false, color: COLORS[0], kitv: 2 },
   lineup: Array(11).fill(null), half: 1, halfState: 'ready', clockMs: 0, lastTick: Date.now(),
-  sub: { state: 'idle', ms: 0, silenced: false }, halfAlerted: false, history: [], goalies: {}
+  sub: { state: 'idle', ms: 0, silenced: false }, halfAlerted: false, history: [], goalies: {}, gameMs: 0
 });
 function withTeam(s) {
   for (const name of TEAM) { const id = 'p' + s.nextId++; s.players.push({ id, name, present: true, prefs: [] }); s.stats[id] = { played: 0, bench: 0 }; }
@@ -38,7 +41,7 @@ function withTeam(s) {
 }
 
 let S = load() || fresh();
-const UI = { openPrefs: null, sel: null, pending: [], menu: false, paste: false, focusAdd: false, dlg: null };
+const UI = { openPrefs: null, sel: null, pending: [], menu: false, more: false, paste: false, focusAdd: false, dlg: null };
 let needsRender = false, lastSave = 0, lastDueBeep = 0, drag = null, suppressClickUntil = 0;
 
 function load() {
@@ -50,8 +53,8 @@ function load() {
     if (!saved.settings || saved.settings.kitv !== 2) { s.settings.color = COLORS[0]; s.settings.kitv = 2; } // team kit is neon green
     // Saved by an older build (empty or sample roster): load the team once, unless a game is already under way.
     if (!saved.seeded) { s.seeded = 1; if (s.phase === 'setup') { s.players = []; s.stats = {}; s.nextId = 1; withTeam(s); } }
-    // A game left "running" for hours means the app was closed; resume paused rather than inventing time.
-    if (s.halfState === 'running' && Date.now() - s.lastTick > 3 * 3600e3) s.halfState = 'paused';
+    // A game left "running" longer than a locked phone plausibly stays asleep means the app was closed; resume paused rather than inventing time.
+    if (s.halfState === 'running' && Date.now() - s.lastTick > STALE_MS) s.halfState = 'paused';
     if (s.halfState !== 'running') s.lastTick = Date.now();
     return s;
   } catch (e) { return null; }
@@ -80,6 +83,8 @@ function benchPlayers() {
 }
 const pairIdx = pid => UI.pending.findIndex(p => p.off === pid || p.on === pid);
 function pushHist() { S.history.push(S.lineup.slice()); if (S.history.length > 25) S.history.shift(); }
+// Whoever is in goal during a live half is that half's goalie (an injury swap, or undoing one), so the summary and the 2nd-half "same goalie" check stay right.
+function syncGoalie() { if (!immediate() && S.lineup[0]) S.goalies[S.half] = S.lineup[0]; }
 function place(pid, i) { const at = S.lineup.indexOf(pid); if (at >= 0) S.lineup[at] = null; S.lineup[i] = pid; }
 function addPlayers(names) {
   for (const raw of names) {
@@ -95,11 +100,23 @@ function unlockAudio() {
   try {
     if (navigator.audioSession) navigator.audioSession.type = 'playback'; // lets sound play with the iPhone ring switch on silent (iOS 17+)
     if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
-    if (actx.state === 'suspended') actx.resume();
+    wakeAudio();
   } catch (e) { /* no audio */ }
 }
+// Locking the phone or switching apps suspends the context (iOS reports "interrupted"); wake it whenever it is not running.
+function wakeAudio() {
+  try { if (actx && actx.state !== 'running') return actx.resume().catch(() => { /* needs a tap first */ }); } catch (e) { /* no audio */ }
+}
+let beepWaiting = false;
 function beep(n = 3, freq = 880) {
   if (!actx) return;
+  if (actx.state === 'running') { playTones(n, freq); return; }
+  // Tones scheduled on a frozen clock never sound, so wake the context first and play once it runs. One wake-up at a time, so a slow resume can't stack beeps.
+  if (beepWaiting) return;
+  beepWaiting = true;
+  actx.resume().then(() => { if (actx.state === 'running') playTones(n, freq); }).catch(() => { /* needs a tap first */ }).finally(() => { beepWaiting = false; });
+}
+function playTones(n, freq) {
   const t0 = actx.currentTime;
   for (let k = 0; k < n; k++) {
     const t = t0 + k * 0.3, o = actx.createOscillator(), g = actx.createGain();
@@ -119,7 +136,7 @@ function tick() {
   const now = Date.now(), d = Math.max(0, now - S.lastTick);
   S.lastTick = now;
   if (S.phase === 'game' && S.halfState === 'running' && d > 0) {
-    S.clockMs += d;
+    S.clockMs += d; S.gameMs = (S.gameMs || 0) + d;
     for (const p of present()) { const s = st(p.id); if (S.lineup.includes(p.id)) s.played += d; else s.bench += d; }
     if (S.sub.state === 'running') {
       S.sub.ms += d;
@@ -141,16 +158,24 @@ function paintLive() {
   const c = $('[data-clock]'); if (c) c.classList.toggle('over', rem < 0);
   setText('[data-elapsed]', fmt(S.clockMs) + ' played');
   if (S.sub.state === 'running') {
-    setText('[data-subtime]', fmt(subMs() - S.sub.ms, true));
-    const f = $('[data-subfill]'); if (f) f.style.width = Math.min(100, S.sub.ms / subMs() * 100) + '%';
-  } else if (S.sub.state === 'due') setText('[data-subover]', '+' + fmt(S.sub.ms - subMs()) + ' past due');
+    const left = Math.max(0, subMs() - S.sub.ms);
+    setText('[data-subtime]', fmt(left, true));
+    const a = $('[data-subarc]');
+    if (a) { a.setAttribute('stroke-dasharray', arcDash(left / subMs())); a.classList.toggle('hot', left <= 30000); }
+  } else if (S.sub.state === 'due') setText('[data-subover]', '+' + fmt(S.sub.ms - subMs()));
   const avg = avgPlayed();
-  document.querySelectorAll('[data-badge]').forEach(b => {
-    const id = b.dataset.badge, t = mins(st(id).played) + 'm', cls = 'min ' + fairness(id, avg);
-    if (b.textContent !== t) b.textContent = t;
-    if (b.className !== cls.trim()) b.className = cls.trim();
+  document.querySelectorAll('[data-ring]').forEach(r => {
+    const id = r.dataset.ring, p = ringPct(id).toFixed(1), cls = ('ring ' + ringCls(id, avg)).trim();
+    if (r.dataset.p !== p) { r.dataset.p = p; r.style.setProperty('--p', p); }
+    if (r.className !== cls) r.className = cls;
   });
+  document.querySelectorAll('[data-badge]').forEach(b => {
+    const id = b.dataset.badge, f = fairness(id, avg), v = f + '|' + chipInner(id, f);
+    if (b.dataset.v !== v) { b.dataset.v = v; b.innerHTML = chipInner(id, f); b.className = ('mn ' + f).trim(); }
+  });
+  document.querySelectorAll('[data-wait]').forEach(w => setText2(w, waitText(w.dataset.wait)));
 }
+const setText2 = (e, txt) => { if (e.textContent !== txt) e.textContent = txt; };
 
 /* ---------------- Rendering ---------------- */
 // Pick readable text for the kit color, and a keeper color that never matches the kit (yellow, or magenta if the kit is yellow/green).
@@ -168,10 +193,32 @@ function applyKit() {
   root.setProperty('--gk-ink', clash ? '#fff' : '#1A1400');
 }
 
+// Re-rendering swaps the DOM, which would empty half-typed text in the add / paste / late-arrival forms.
+// Carry each named field's value, focus and cursor across the repaint.
+function keepFields(scope, paint) {
+  const saved = {}, active = document.activeElement;
+  let focus = null;
+  const each = fn => scope.querySelectorAll('form[data-form]').forEach(f => [...f.elements].forEach(el => { if (el.name) fn(f.dataset.form + ':' + el.name, el); }));
+  each((key, el) => { saved[key] = el.value; if (el === active) focus = { key, from: el.selectionStart, to: el.selectionEnd }; });
+  paint();
+  each((key, el) => {
+    if (!(key in saved)) return;
+    el.value = saved[key];
+    if (focus && focus.key === key) { el.focus(); try { el.setSelectionRange(focus.from, focus.to); } catch (e) { /* not a text field */ } }
+  });
+  scope.querySelectorAll('select[name=pid]').forEach(s => { s.form.elements.n.hidden = s.value !== '__new'; }); // the "new player" box only shows for that option
+}
+// Skip the repaint when the markup is unchanged (the clock ticking behind an open sheet), so typing, focus and scroll survive.
+function paintInto(el, html) {
+  if (el._html === html) return;
+  el._html = html;
+  keepFields(el, () => { el.innerHTML = html; });
+}
+
 function render() {
   const app = $('#app'), sc = $('.scroll'), top = sc ? sc.scrollTop : 0;
   applyKit();
-  app.innerHTML = S.phase === 'setup' ? setupHTML() : S.phase === 'summary' ? summaryHTML() : gameHTML();
+  keepFields(app, () => { app.innerHTML = S.phase === 'setup' ? setupHTML() : S.phase === 'summary' ? summaryHTML() : gameHTML(); });
   const sc2 = $('.scroll'); if (sc2) sc2.scrollTop = top;
   renderSheet();
   if (UI.focusAdd) { UI.focusAdd = false; const i = $('#addname'); if (i) i.focus(); }
@@ -238,6 +285,81 @@ function setupHTML() {
   <div class="cta"><p class="note">${note}</p><button class="btn go" data-act="toLineup" ${here ? '' : 'disabled'}>Set the lineup</button></div></div>`;
 }
 
+// Ring badge helpers: the ring fills with a player's share of the game on the field; colour comes from fairness().
+const gameMs = () => Math.max(S.gameMs || 0, S.clockMs);
+const ringPct = id => { const g = gameMs(); return g ? Math.min(100, st(id).played / g * 100) : 100; };
+const ringCls = (id, avg) => gameMs() ? fairness(id, avg) : 'plain';
+const chipInner = (id, f) => mins(st(id).played) + '′' + (f ? `<small>${f === 'ahead' ? '▲' : '▼'}</small>` : '');
+const chipHTML = (id, avg) => { if (S.halfState === 'ready' && !st(id).played) return ''; const f = fairness(id, avg); return `<i class="mn ${f}" data-badge="${id}">${chipInner(id, f)}</i>`; };
+const waitText = id => S.halfState === 'ready' && !st(id).bench ? 'Bench' : mins(st(id).bench) + 'm wait';
+const arcDash = frac => `${(CIRC * Math.max(0, Math.min(1, frac))).toFixed(1)} ${CIRC.toFixed(1)}`;
+
+// Half clock and sub timer in one card; the ring is the sub timer (tap to start, tap to silence when due).
+function hudHTML() {
+  const ready = immediate(), running = S.halfState === 'running', sub = S.sub, due = sub.state === 'due';
+  const need = Math.min(11, present().length), left = need - S.lineup.filter(Boolean).length;
+  const pickGK = ready && S.half === 2 && !S.lineup[0];
+  const lineupStatus = pickGK ? '<b class="need">Pick a goalie</b>' : left > 0 ? `<b class="need">${left} left to place</b>` : '<b class="done">Lineup set</b>';
+  const status = ready ? lineupStatus : running ? 'Live' : 'Paused';
+  const half = S.half === 1 ? '1st' : '2nd';
+  const label = due ? `Sub time · ${half} half` : `${half} half · ${status}`;
+  const track = '<circle class="track" cx="48" cy="48" r="40"/>';
+  let ring;
+  if (ready) {
+    ring = `<div class="ringface" role="img" aria-label="${S.settings.subMin} minutes between subs"><svg viewBox="0 0 96 96" aria-hidden="true">${track}</svg><span class="mid"><b>${S.settings.subMin}:00</b><small>per sub</small></span></div>`;
+  } else if (sub.state === 'idle') {
+    ring = `<button class="ringface" data-act="subStart" aria-label="Start sub timer" ${running ? '' : 'disabled'}><svg viewBox="0 0 96 96" aria-hidden="true"><circle class="dash" cx="48" cy="48" r="40"/></svg><span class="mid">${PLAY}<small>Start<span class="lg"> subs</span></small></span></button>`;
+  } else if (sub.state === 'running') {
+    const frac = (subMs() - sub.ms) / subMs();
+    ring = `<div class="ringface"><svg viewBox="0 0 96 96" aria-hidden="true">${track}<circle class="arc${frac * subMs() <= 30000 ? ' hot' : ''}" data-subarc cx="48" cy="48" r="40" stroke-dasharray="${arcDash(frac)}"/></svg><span class="mid"><b data-subtime>${fmt(subMs() - sub.ms, true)}</b><small>next<span class="lg"> subs</span></small></span></div>
+      <button class="reset" data-act="subReset" aria-label="Reset sub timer">↻</button>`;
+  } else {
+    ring = `<button class="ringface" data-act="${sub.silenced ? 'subReset' : 'subSilence'}" aria-label="${sub.silenced ? 'Reset sub timer' : 'Silence the alert'}"><svg viewBox="0 0 96 96" aria-hidden="true">${track}<circle class="arc" cx="48" cy="48" r="40" stroke-dasharray="${arcDash(1)}"/></svg><span class="mid"><b data-subover>+0:00</b><small>${sub.silenced ? 'Reset' : 'Silence'}</small></span></button>
+      <button class="reset" data-act="subReset" aria-label="Reset sub timer">↻</button>`;
+  }
+  const chip = ready || sub.state === 'idle' ? `<button class="chip" data-act="menu" aria-label="Change minutes between subs">Every ${S.settings.subMin} min ▾</button>` : '';
+  return `<section class="hud${running ? ' live' : ''}${due ? ' due' : ''}">
+    <div class="hudl"><div class="halflabel"><span class="livedot"></span>${label}</div>
+      <div class="clock" data-clock>${fmt(halfMs(), true)}</div>
+      <div class="elapsed"><span data-elapsed>0:00 played</span>${chip}</div></div>
+    <div class="subring">${ring}</div></section>`;
+}
+
+// Chips for queued subs during a half; quick actions while setting the lineup before kickoff.
+function trayHTML() {
+  const np = UI.pending.length, sel = UI.sel;
+  if (np) {
+    return `<div class="tray">${UI.pending.map((p, k) => `<span class="q"><span><i class="qd"></i>${esc(P(p.off).name)}</span><b>⇄</b><span><i class="qd on"></i>${esc(P(p.on).name)}</span><button class="qx" data-act="unqueue" data-k="${k}" aria-label="Remove this sub">✕</button></span>`).join('')}</div>`;
+  }
+  if (!immediate()) return '';
+  const parts = [];
+  if (sel && sel.kind === 'spot' && S.lineup[sel.v]) parts.push('<button class="pill primary" data-act="toBench">Move to bench</button>');
+  else {
+    if (S.lineup.some(x => !x) && benchPlayers().length) parts.push('<button class="pill primary" data-act="autofill">Auto-fill by position</button>');
+    if (S.lineup.some(x => x)) parts.push('<button class="pill" data-act="clearField">Clear field</button>');
+  }
+  return parts.length ? `<div class="tray">${parts.join('')}</div>` : '';
+}
+
+function dockHTML() {
+  const np = UI.pending.length, ready = immediate(), running = S.halfState === 'running';
+  const over = running && halfMs() - S.clockMs < 0;
+  let main;
+  if (np) main = `<button class="dmain go" data-act="confirmSubs">Make ${np} sub${np > 1 ? 's' : ''}</button>`;
+  else if (ready) main = `<button class="dmain go" data-act="kickoff">Kick off${S.half === 2 ? ' 2nd half' : ''}</button>`;
+  else if (over) main = '<button class="dmain flare" data-act="endHalf">End half</button>';
+  else if (running) main = `<button class="dmain" data-act="pause">${PAUSE}Pause clock</button>`;
+  else main = `<button class="dmain go" data-act="resume">${PLAY}Resume clock</button>`;
+  const left = np ? '<button class="dbtn" data-act="clearPending" aria-label="Clear queued subs">✕</button>'
+    : `<button class="dbtn" data-act="undo" aria-label="Undo last lineup change" ${S.history.length ? '' : 'disabled'}>↶</button>`;
+  const items = [];
+  if (over) items.push('<button data-act="moreDo" data-fn="pause">Pause clock</button>');
+  else if (!ready) items.push('<button data-act="moreDo" data-fn="endHalf">End half</button>');
+  items.push('<button data-act="moreDo" data-fn="menu">Game settings</button>', '<button data-act="moreDo" data-fn="lateOpen">Late arrival</button>', '<button class="dng" data-act="moreDo" data-fn="newGame">End game…</button>');
+  return `<div class="dockwrap">${UI.more ? `<div class="more" role="menu">${items.join('')}</div>` : ''}
+    <nav class="dock">${left}${main}<button class="dbtn" data-act="more" aria-label="More options" aria-expanded="${UI.more}">•••</button></nav></div>`;
+}
+
 function gameHTML() {
   const sp = spots(), avg = avgPlayed();
   const sel = UI.sel;
@@ -249,76 +371,31 @@ function gameHTML() {
     const pid = S.lineup[i], pos = `left:${s[1]}%;top:${s[2]}%`;
     const isSel = sel && sel.kind === 'spot' && sel.v === i;
     const pref = selPlayerPrefs && selPlayerPrefs.includes(s[0]) ? ' pref' : '';
-    if (!pid) return `<button class="tok empty${isSel ? ' sel' : ''}${pref}" style="${pos}" data-act="spot" data-i="${i}" aria-label="Empty ${ROLE_NAME[s[0]]} spot"><span class="disc">${ROLE_LABEL[s[0]]}</span></button>`;
+    if (!pid) return `<button class="tok empty${isSel ? ' sel' : ''}${pref}" style="${pos}" data-act="spot" data-i="${i}" aria-label="Empty ${ROLE_NAME[s[0]]} spot"><span class="ring empty"><span class="disc">${ROLE_LABEL[s[0]]}</span></span></button>`;
     const p = P(pid), pi = pairIdx(pid);
     const cls = ['tok', s[0] === 'GK' ? 'gk' : '', isSel ? 'sel' : '', pi >= 0 ? 'off' : '', pref.trim()].filter(Boolean).join(' ');
-    const badge = S.halfState === 'ready' && !st(pid).played ? '' : `<i class="min ${fairness(pid, avg)}" data-badge="${pid}">${mins(st(pid).played)}m</i>`;
     const lock = s[0] === 'GK' && !immediate() ? LOCK : '';
-    return `<button class="${cls}" style="${pos}" data-act="spot" data-i="${i}" aria-label="${esc(p.name)}, ${ROLE_NAME[s[0]]}"><span class="disc">${esc(initials(p.name))}${badge}${lock}${pi >= 0 ? `<i class="pair">${pi + 1}</i>` : ''}</span><span class="nm">${esc(p.name)}</span></button>`;
+    const incoming = pi >= 0 ? `<i class="incoming">⇄ ${esc(initials(P(UI.pending[pi].on).name))}</i>` : '';
+    return `<button class="${cls}" style="${pos}" data-act="spot" data-i="${i}" aria-label="${esc(p.name)}, ${ROLE_NAME[s[0]]}"><span class="ring ${ringCls(pid, avg)}" data-ring="${pid}" style="--p:${ringPct(pid).toFixed(1)}"><span class="disc">${esc(initials(p.name))}</span>${chipHTML(pid, avg)}${lock}${incoming}</span><span class="nm">${esc(p.name)}</span></button>`;
   }).join('');
 
   // ----- bench
   const bench = benchPlayers().map(p => {
     const pi = pairIdx(p.id), isSel = sel && sel.kind === 'bench' && sel.v === p.id;
     const star = selSpotRole && p.prefs.includes(selSpotRole) ? '<i class="star" aria-label="likes this position">★</i>' : '';
-    const badge = S.halfState === 'ready' && !st(p.id).played ? '' : `<i class="min ${fairness(p.id, avg)}" data-badge="${p.id}">${mins(st(p.id).played)}m</i>`;
-    return `<button class="btok${isSel ? ' sel' : ''}${pi >= 0 ? ' on' : ''}" data-act="bench" data-pid="${p.id}" aria-label="${esc(p.name)} on the bench"><span class="disc">${esc(initials(p.name))}${badge}${pi >= 0 ? `<i class="pair">${pi + 1}</i>` : ''}</span><span class="nm">${esc(p.name)}</span>${star}</button>`;
+    const sub = pi >= 0 ? `⇄ ${esc(P(UI.pending[pi].off).name.split(' ')[0])}` : `<span data-wait="${p.id}">${waitText(p.id)}</span>`;
+    return `<button class="bcard${isSel ? ' sel' : ''}${pi >= 0 ? ' queued' : ''}" data-act="bench" data-pid="${p.id}" aria-label="${esc(p.name)} on the bench"><span class="ring ${ringCls(p.id, avg)}" data-ring="${p.id}" style="--p:${ringPct(p.id).toFixed(1)}"><span class="disc">${esc(initials(p.name))}</span></span><span class="btxt"><b>${esc(p.name)}</b><small>${sub}</small></span>${star}</button>`;
   }).join('');
 
-  // ----- clock + buttons
-  const running = S.halfState === 'running', paused = S.halfState === 'paused', ready = S.halfState === 'ready';
-  const rem = halfMs() - S.clockMs;
-  const need = Math.min(11, present().length), left = need - S.lineup.filter(Boolean).length;
-  const pickGK = ready && S.half === 2 && !S.lineup[0];
-  const lineupStatus = pickGK ? '<b class="need">Pick a goalie</b>' : left > 0 ? `<b class="need">${left} left to place</b>` : '<b class="done">Lineup set</b>';
-  const status = ready ? lineupStatus : running ? 'Live' : 'Paused';
-  const primary = ready ? `<button class="btn go primary" data-act="kickoff">Kick off${S.half === 2 ? ' 2nd half' : ''}</button>`
-    : running ? `<button class="btn primary" data-act="pause">Pause clock</button>` : `<button class="btn go primary" data-act="resume">Resume clock</button>`;
-  const endBtn = ready ? '' : `<button class="btn ${rem < 0 ? 'flare' : 'ghost'} small" data-act="endHalf">End half</button>`;
-  const top = `<div class="top"><div class="clockbox ${running ? 'live' : ''}">
-      <div class="halflabel"><span class="livedot"></span>${S.half === 1 ? '1st' : '2nd'} half · ${status}</div>
-      <div class="clock" data-clock>${fmt(halfMs(), true)}</div><div class="elapsed" data-elapsed>0:00 played</div></div>
-    <div class="topbtns">${primary}${endBtn}<button class="btn ghost iconbtn" data-act="undo" aria-label="Undo last lineup change" ${S.history.length ? '' : 'disabled'}>↶</button><button class="btn ghost iconbtn" data-act="menu" aria-label="Game settings">⚙</button></div></div>`;
-
-  // ----- sub timer
-  let subcard;
-  if (S.sub.state === 'running') {
-    subcard = `<div class="subcard run"><div class="subfill" data-subfill style="width:${Math.min(100, S.sub.ms / subMs() * 100)}%"></div>
-      <div class="subtxt"><b data-subtime>${fmt(subMs() - S.sub.ms, true)}</b><span>until next subs</span></div>
-      <div class="actions"><button class="btn ghost small" data-act="subReset">Reset</button></div></div>`;
-  } else if (S.sub.state === 'due') {
-    subcard = `<div class="subcard due"><div class="subtxt"><b>Sub time</b><span data-subover>+0:00 past due</span></div>
-      <div class="actions">${S.sub.silenced ? '' : '<button class="btn ghost small" data-act="subSilence">Silence</button>'}<button class="btn ghost small" data-act="subReset">Reset</button></div></div>`;
-  } else {
-    subcard = `<div class="subcard idle"><div><div class="cap">Minutes between subs</div>${segMin(S.settings.subMin)}</div>
-      <div class="actions"><button class="btn flare" data-act="subStart" ${running ? '' : 'disabled'}>Start sub timer</button></div></div>`;
-  }
-
-  // ----- action bar
-  const np = UI.pending.length;
-  let action;
-  if (np) {
-    action = `<button class="btn ghost" data-act="clearPending" style="flex:1">Clear</button><button class="btn go" data-act="confirmSubs">Make ${np} sub${np > 1 ? 's' : ''}</button>`;
-  } else if (immediate()) {
-    const empties = S.lineup.some(x => !x), anyField = S.lineup.some(x => x);
-    if (sel && sel.kind === 'spot' && S.lineup[sel.v]) action = `<button class="btn" data-act="toBench">Move to bench</button>`;
-    else {
-      const parts = [];
-      if (empties && benchPlayers().length) parts.push(`<button class="btn" data-act="autofill">Auto-fill by position</button>`);
-      if (anyField) parts.push(`<button class="btn ghost" data-act="clearField">Clear field</button>`);
-      action = parts.join('') || `<div class="hint">Drag a bench player onto the field, or tap a player, then a spot.</div>`;
-    }
-  } else {
-    action = `<div class="hint">Drag a bench player onto a field player (or tap one, then the other). Line up 3–4 swaps, then confirm.</div>`;
-  }
-
-  const benchHint = immediate() ? (benchPlayers().length > 5 ? 'Swipe for more · drag a player to a spot' : 'Drag or tap a player to a spot') : 'Longest wait first';
+  const benchHint = immediate() ? 'Drag or tap a player to a spot' : 'Longest wait first';
   const legend = immediate() ? '' : '<span class="legend"><i style="background:var(--owed)"></i>behind<i style="background:var(--ahead)"></i>ahead</span>';
-  return `<div class="game">${top}${subcard}
+  return `<div class="game">${hudHTML()}
     <div class="pitchwrap"><div class="pitch">${pitchSVG()}${field}</div></div>
-    <div class="benchbox"><div class="benchhead"><span>Bench (${benchPlayers().length})</span><small>${benchHint}${legend}</small></div>
-      <div class="bench">${bench || '<div class="benchempty">Nobody on the bench.</div>'}</div></div>
-    <div class="actionbar">${action}</div></div>`;
+    <div class="side">${trayHTML()}
+      <div class="benchbox"><div class="benchhead"><span>Bench (${benchPlayers().length})</span><small>${benchHint}${legend}</small></div>
+        <div class="bgrid${benchPlayers().length > 5 ? ' many' : ''}">${bench}<button class="bcard late" data-act="lateOpen">+ Late arrival</button></div></div>
+      ${dockHTML()}</div>
+    ${UI.more ? '<div class="morescrim" data-act="closeMore"></div>' : ''}</div>`;
 }
 
 function pitchSVG() {
@@ -345,6 +422,8 @@ function summaryHTML() {
 
 const confirmGoalie = pid => ask({ title: 'Swap the goalie?', body: `${P(pid).name} is the goalie for this half. Only swap for an injury or if she asks.`, ok: 'Swap goalie', cancel: 'Keep her in goal' });
 const LOCK = '<i class="lock" aria-label="Goalie for this half"><svg viewBox="0 0 12 12" aria-hidden="true"><rect x="2" y="5.5" width="8" height="6" rx="1.2"/><path d="M4 5.5V4a2 2 0 014 0v1.5"/></svg></i>';
+const PLAY = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l13-7.5z"/></svg>';
+const PAUSE = '<svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="5.5" y="4.5" width="4.5" height="15" rx="1.2"/><rect x="14" y="4.5" width="4.5" height="15" rx="1.2"/></svg>';
 function lateOptions() { return S.players.filter(p => !p.present); }
 function lateFormHTML() {
   const absent = lateOptions();
@@ -357,7 +436,7 @@ function lateFormHTML() {
 
 function renderSheet() {
   const root = $('#sheet-root'), dlg = $('#dlg-root');
-  root.innerHTML = UI.menu && S.phase === 'game' ? `<div class="scrim" data-act="closeMenu"><div class="sheet" role="dialog" aria-label="Game settings" data-stop>
+  paintInto(root, UI.menu && S.phase === 'game' ? `<div class="scrim" data-act="closeMenu"><div class="sheet" role="dialog" aria-label="Game settings" data-stop>
     <header><h2>Game settings</h2><button class="btn ghost small" data-act="closeMenu">Done</button></header>
     <div class="panel">
       <div class="field-row"><div class="lbl">Minutes between subs</div>${segMin(S.settings.subMin)}</div>
@@ -369,14 +448,16 @@ function renderSheet() {
     <div class="panel"><div class="field-row"><div class="lbl">Late arrival<small>${lateOptions().length ? 'Pick who just showed up.' : 'Everyone on the roster is here. Add someone new:'}</small></div></div>
       ${lateFormHTML()}</div>
     <button class="btn danger wide" data-act="newGame">End game and start over</button>
-  </div></div>` : '';
+  </div></div>` : '');
   const d = UI.dlg;
-  dlg.innerHTML = d ? `<div class="scrim dlg"><div class="dialog" role="alertdialog" aria-labelledby="dt"><h3 id="dt">${esc(d.title)}</h3><p>${esc(d.body)}</p>
-    <div class="row"><button class="btn ghost" data-act="dlgNo">${esc(d.cancel)}</button><button class="btn ${d.danger ? 'danger' : 'go'}" data-act="dlgYes">${esc(d.ok)}</button></div></div></div>` : '';
+  paintInto(dlg, d ? `<div class="scrim dlg"><div class="dialog" role="alertdialog" aria-labelledby="dt"><h3 id="dt">${esc(d.title)}</h3><p>${esc(d.body)}</p>
+    <div class="row"><button class="btn ghost" data-act="dlgNo">${esc(d.cancel)}</button><button class="btn ${d.danger ? 'danger' : 'go'}" data-act="dlgYes">${esc(d.ok)}</button></div></div></div>` : '');
 }
 
 /* ---------------- Dialog + toast ---------------- */
-function ask(o) { return new Promise(res => { UI.dlg = Object.assign({ ok: 'OK', cancel: 'Cancel', danger: false }, o, { res }); renderSheet(); }); }
+// Resolves true / false from the buttons. A dialog replaced by a newer one resolves null, so its caller is never left waiting;
+// callers where "cancel" means "go ahead" must test `=== false` rather than falsiness.
+function ask(o) { return new Promise(res => { if (UI.dlg) UI.dlg.res(null); UI.dlg =Object.assign({ ok: 'OK', cancel: 'Cancel', danger: false }, o, { res }); renderSheet(); }); }
 let toastTimer = 0;
 function toast(msg, withUndo) {
   const t = $('#toast');
@@ -425,7 +506,7 @@ const H = {
         else { pushHist(); [S.lineup[i], S.lineup[sel.v]] = [S.lineup[sel.v], S.lineup[i]]; UI.sel = null; }
       } else UI.sel = { kind: 'spot', v: i };
     }
-    commit();
+    syncGoalie(); commit();
   },
   bench(t) {
     const pid = t.dataset.pid, sel = UI.sel;
@@ -444,11 +525,12 @@ const H = {
     if (!UI.pending.length) return;
     pushHist(); const n = UI.pending.length;
     for (const { off, on } of UI.pending) { const i = S.lineup.indexOf(off); if (i >= 0) S.lineup[i] = on; }
-    UI.pending = []; UI.sel = null;
+    UI.pending = []; UI.sel = null; syncGoalie();
     S.sub = { state: S.settings.autoStart && S.halfState === 'running' ? 'running' : 'idle', ms: 0, silenced: false };
     commit(); toast(`${n} sub${n > 1 ? 's' : ''} made`, true);
   },
   clearPending() { UI.pending = []; UI.sel = null; commit(); },
+  unqueue(t) { UI.pending.splice(+t.dataset.k, 1); commit(); },
   toBench() { if (UI.sel && UI.sel.kind === 'spot') { pushHist(); S.lineup[UI.sel.v] = null; UI.sel = null; commit(); } },
   autofill() {
     // Match as many position preferences as possible (so a player tagged for two spots can't block someone tagged for one),
@@ -477,16 +559,16 @@ const H = {
   clearField() { pushHist(); S.lineup = Array(11).fill(null); UI.sel = null; commit(); },
   undo() {
     const h = S.history.pop(); if (!h) return;
-    S.lineup = h; UI.sel = null; UI.pending = []; commit();
+    S.lineup = h; UI.sel = null; UI.pending = []; syncGoalie(); commit();
   },
 
   // clock
   async kickoff() {
     unlockAudio();
     const need = Math.min(11, present().length), have = S.lineup.filter(Boolean).length;
-    if (!S.lineup[0] && need) { if (await ask({ title: 'No goalie yet', body: `Choose who plays goalie in the ${S.half === 1 ? '1st' : '2nd'} half, then kick off.`, ok: 'Pick a goalie', cancel: 'Kick off anyway' })) return; }
+    if (!S.lineup[0] && need) { if ((await ask({ title: 'No goalie yet', body: `Choose who plays goalie in the ${S.half === 1 ? '1st' : '2nd'} half, then kick off.`, ok: 'Pick a goalie', cancel: 'Kick off anyway' })) !== false) return; }
     else if (S.half === 2 && S.goalies[1] && S.lineup[0] === S.goalies[1]) {
-      if (await ask({ title: 'Same goalie?', body: `${P(S.goalies[1]).name} played goalie in the 1st half. Start her in goal again?`, ok: 'Pick someone else', cancel: 'Same goalie' })) return;
+      if ((await ask({ title: 'Same goalie?', body: `${P(S.goalies[1]).name} played goalie in the 1st half. Start her in goal again?`, ok: 'Pick someone else', cancel: 'Same goalie' })) !== false) return;
     }
     if (have < need && !(await ask({ title: 'Lineup not full', body: `Only ${have} of ${need} spots are filled. Kick off anyway?`, ok: 'Kick off' }))) return;
     S.goalies[S.half] = S.lineup[0] || null;
@@ -512,6 +594,10 @@ const H = {
 
   // menu + dialogs
   menu() { UI.menu = true; renderSheet(); },
+  more() { UI.more = !UI.more; render(); },
+  closeMore() { UI.more = false; render(); },
+  moreDo(t) { const fn = H[t.dataset.fn]; UI.more = false; render(); if (fn) fn(t); }, // dock ••• menu items reuse the regular handlers
+  lateOpen() { UI.menu = true; renderSheet(); const f = $('.latefm'); if (f) f.scrollIntoView({ block: 'center' }); },
   closeMenu(t, e) { if (e.target.closest('[data-stop]') && t.classList.contains('scrim')) return; UI.menu = false; renderSheet(); },
   async newGame() {
     UI.menu = false;
@@ -536,7 +622,7 @@ function changeFormation(f) {
 }
 
 const FORMS = {
-  add(f) { const i = f.elements.n; addPlayers([i.value]); UI.focusAdd = true; commit(); },
+  add(f) { addPlayers([f.elements.n.value]); f.reset(); UI.focusAdd = true; commit(); }, // reset, or the kept-field logic would restore the name just added
   paste(f) { addPlayers(f.elements.t.value.split(/[\n,;]+/)); UI.paste = false; commit(); },
   late(f) {
     const sel = f.elements.pid, pid = sel ? sel.value : '__new';
@@ -561,14 +647,13 @@ function dropTarget(cx, cy) {
   });
   if (best) return best;
   const el = document.elementFromPoint(cx, cy);
-  const chip = el && el.closest('.btok'); if (chip) return { el: chip, type: 'bench', pid: chip.dataset.pid };
+  const chip = el && el.closest('.bcard[data-act=bench]'); if (chip) return { el: chip, type: 'bench', pid: chip.dataset.pid };
   const box = el && el.closest('.benchbox'); if (box) return { el: box, type: 'benchbox' };
   return null;
 }
 function ghostPoint(e) { return { x: e.clientX, y: e.clientY - (e.pointerType === 'mouse' ? 0 : 38) }; }
 function endDrag() {
   if (!drag) return;
-  clearTimeout(drag.timer);
   if (drag.ghost) drag.ghost.remove();
   if (drag.t) drag.t.classList.remove('dragsrc');
   document.querySelectorAll('.drop').forEach(x => x.classList.remove('drop'));
@@ -604,15 +689,13 @@ document.addEventListener('pointerdown', e => {
   const kind = t.dataset.act === 'bench' ? 'bench' : 'spot';
   const pid = kind === 'bench' ? t.dataset.pid : S.lineup[+t.dataset.i];
   if (!pid) return;
-  drag = { t, kind, pid, i: kind === 'spot' ? +t.dataset.i : null, x0: e.clientX, y0: e.clientY, id: e.pointerId, active: false, ghost: null, target: null, armed: e.pointerType !== 'touch' || kind !== 'bench', timer: 0 };
-  if (!drag.armed) { const d = drag; d.timer = setTimeout(() => { d.armed = true; }, 180); } // bench chips: hold briefly to drag in any direction; a quick sideways swipe scrolls the bench
+  drag = { t, kind, pid, i: kind === 'spot' ? +t.dataset.i : null, x0: e.clientX, y0: e.clientY, id: e.pointerId, active: false, ghost: null, target: null };
 });
 document.addEventListener('pointermove', e => {
   if (!drag || e.pointerId !== drag.id) return;
   if (!drag.active) {
     const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
     if (Math.hypot(dx, dy) < 10) return;
-    if (!drag.armed && Math.abs(dx) > Math.abs(dy)) { clearTimeout(drag.timer); drag = null; return; } // sideways swipe scrolls the bench
     const disc = drag.t.querySelector('.disc'), r = disc.getBoundingClientRect();
     const g = document.createElement('div');
     g.className = 'dragghost' + (disc.closest('.tok.gk') ? ' gk' : '');
@@ -640,7 +723,7 @@ document.addEventListener('pointerup', e => {
   suppressClickUntil = Date.now() + 120;
   endDrag(); Promise.resolve(performDrop(src, tgt)).finally(render);
 });
-document.addEventListener('touchmove', e => { if (drag && (drag.active || drag.armed) && e.cancelable) e.preventDefault(); }, { passive: false });
+document.addEventListener('touchmove', e => { if (drag && e.cancelable) e.preventDefault(); }, { passive: false });
 document.addEventListener('pointercancel', e => { if (drag && e.pointerId === drag.id) endDrag(); });
 document.addEventListener('contextmenu', e => { if (drag) e.preventDefault(); });
 
@@ -659,7 +742,7 @@ document.addEventListener('submit', e => {
   e.preventDefault(); FORMS[f.dataset.form](f);
 });
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { tick(); if (S.phase === 'game' && S.halfState === 'running') keepAwake(); }
+  if (document.visibilityState === 'visible') { wakeAudio(); tick(); if (S.phase === 'game' && S.halfState === 'running') keepAwake(); }
 });
 window.addEventListener('pagehide', save);
 
