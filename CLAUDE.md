@@ -20,6 +20,13 @@ python -m http.server 8000   # then http://localhost:8000
 
 Published with GitHub Pages from the root of `main` on `maclaren4l/sub-board` (https://maclaren4l.github.io/sub-board/). Commit, push to `main`, and Pages rebuilds in a minute or two; after a push, check that the live `sw.js` shows the new `VERSION`. All asset paths are relative so the app works under the `/sub-board/` subpath, and `.nojekyll` keeps Pages from processing the files. There is no CI.
 
+## Checking changes
+
+There are no tests, so changes get checked by driving the served app in headless Chrome (`puppeteer-core` pointed at the installed Chrome, a fresh browser context per run so `localStorage` starts empty; keep the scripts outside the repo). Use `touchscreen` taps and `isMobile`/`hasTouch` viewports of 393x852, 852x393 and 1180x820 to cover portrait, phone landscape and iPad. Two things make this practical:
+
+- **Fake the clock.** Inject `Date.now = () => realNow + window.__off` with `evaluateOnNewDocument`, then bump `__off` and wait ~700 ms for the 250 ms tick to credit "10 minutes" without waiting. `window.__subBoard.state` gives the lineup, goalies and per-player stats to assert against.
+- **Wait out the undo toast.** `#toast.show` sits over the middle of the dock for 9 s after "N subs made" (with Undo) and 4 s after other toasts, so a tap on Kick off or ••• right after one lands on the toast and silently does nothing. It also carries over halftime. Wait for `#toast.show` to disappear before tapping dock buttons.
+
 ## Gotchas when changing things
 
 - **Bump `VERSION` in [sw.js](sw.js)** after changing any cached file, or installed phones keep serving the old copy. If you add a file, add it to `FILES` in `sw.js` too.
