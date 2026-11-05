@@ -759,6 +759,8 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') { wakeAudio(); tick(); if (S.phase === 'game' && S.halfState === 'running') keepAwake(); }
 });
 window.addEventListener('pagehide', save);
+// Rotation or a browser-toolbar change moves the dock, so keep a visible toast over it.
+window.addEventListener('resize', () => { if ($('#toast').classList.contains('show')) placeToast(); });
 
 /* ---------------- Boot ---------------- */
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
