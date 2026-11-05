@@ -469,9 +469,11 @@ function placeToast() {
 }
 function hideToast() { clearTimeout(toastTimer); $('#toast').classList.remove('show'); }
 function toast(msg, withUndo) {
+  if (UI.more) { hideToast(); return; } // the open ••• menu is where the toast would float
   const t = $('#toast');
   t.innerHTML = `<span>${esc(msg)}</span>${withUndo ? '<button data-act="undo">Undo</button>' : ''}`;
-  placeToast(); t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), withUndo ? 9000 : 4000);
+  // Place it now and again just before its first paint, so a render that moves the dock right after (as the time-up toast's does) can't leave it stale.
+  placeToast(); requestAnimationFrame(placeToast); t.classList.add('show'); clearTimeout(toastTimer); toastTimer = setTimeout(hideToast, withUndo ? 9000 : 4000);
 }
 
 /* ---------------- Actions ---------------- */
@@ -479,7 +481,7 @@ const H = {
   // setup
   restoreTeam() {
     const have = new Set(S.players.map(p => p.name));
-    addPlayers(TEAM.filter(n => !have.has(n))); S.players.forEach(p => { if (TEAM.includes(p.name)) p.present = true; }); commit();
+    addPlayers(TEAM.filter(n => !have.has(n))); S.players.forEach(p => { if (TEAM.includes(p.name)) p.present = true; }); hideToast(); commit();
   },
   sample() { addPlayers(SAMPLE); const find = n => S.players.find(p => p.name === n); find('Hazel').prefs = ['GK']; find('Piper').prefs = ['GK', 'DEF']; find('Ava').prefs = ['FWD']; commit(); },
   pasteToggle() { UI.paste = !UI.paste; commit(); },
@@ -615,7 +617,7 @@ const H = {
   async newGame() {
     UI.menu = false;
     if (!(await ask({ title: 'Start a new game?', body: 'This clears the roster, lineup and minutes played.', ok: 'Clear everything', danger: true }))) { render(); return; }
-    const keep = S.settings; S = fresh(); S.settings = keep; UI.sel = null; UI.pending = []; save(); render();
+    const keep = S.settings; S = fresh(); S.settings = keep; UI.sel = null; UI.pending = []; hideToast(); save(); render();
   },
   dlgYes() { const d = UI.dlg; UI.dlg = null; renderSheet(); d.res(true); },
   dlgNo() { const d = UI.dlg; UI.dlg = null; renderSheet(); d.res(false); }
