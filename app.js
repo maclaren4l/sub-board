@@ -464,8 +464,8 @@ let toastTimer = 0;
 // On the game screen the toast floats just above the dock (centred over it, so it also works in the landscape column) instead of covering its buttons.
 function placeToast() {
   const t = $('#toast'), d = $('.dockwrap');
-  if (d) { const r = d.getBoundingClientRect(); t.style.setProperty('--tx', (r.left + r.width / 2) + 'px'); t.style.setProperty('--tb', (innerHeight - r.top + 8) + 'px'); }
-  else { t.style.removeProperty('--tx'); t.style.removeProperty('--tb'); }
+  if (d) { const r = d.getBoundingClientRect(); t.style.setProperty('--tx', (r.left + r.width / 2) + 'px'); t.style.setProperty('--tt', (r.top - 8) + 'px'); }
+  else { t.style.removeProperty('--tx'); t.style.removeProperty('--tt'); }
 }
 function hideToast() { clearTimeout(toastTimer); $('#toast').classList.remove('show'); }
 function toast(msg, withUndo) {
