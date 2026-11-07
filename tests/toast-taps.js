@@ -11,6 +11,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   await page.goto(URL, { waitUntil: 'networkidle0' });
   const tap = async sel => { const e = await page.$(sel); if (!e) throw new Error('missing ' + sel); await e.tap(); await wait(220); };
   const touch = async (x, y) => { await page.touchscreen.tap(x, y); await wait(220); };
+  await tap('[data-act=sample]'); // the roster is no longer built in: load the sample one
   await tap('[data-act=toLineup]'); await tap('[data-act=autofill]'); await tap('[data-act=kickoff]'); await wait(400);
   const b = await page.$eval('.bcard[data-act=bench]', e => e.dataset.pid);
   await tap(`.bcard[data-pid="${b}"]`); await tap('.tok[data-i="6"]'); await tap('[data-act=confirmSubs]'); await wait(300);

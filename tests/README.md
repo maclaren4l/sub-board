@@ -40,4 +40,6 @@ node tests/toast-taps.js http://localhost:8000/ 852 393
 node tests/toast-taps.js http://localhost:8000/ 1180 820
 ```
 
+Both scripts load the in-app sample roster first (the app has no built-in team), so they work from a fresh browser context.
+
 Arguments are `[url] [width] [height]`, defaulting to `http://localhost:8000/` at 393x852. To check the published site, use `https://maclaren4l.github.io/sub-board/` as the URL. Each run takes a fresh browser context, so saved game state never carries over; `toast-fixes.js` takes about 20 s because it waits out the 9 s Undo toast.

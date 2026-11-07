@@ -25,18 +25,19 @@ const CIRC = 2 * Math.PI * 40; // sub-timer ring circumference (r=40 in a 96 vie
 const SAMPLE = ['Ava', 'Mia', 'Zoe', 'Lily', 'Emma', 'Chloe', 'Nora', 'Ruby', 'Ella', 'Grace', 'Maya', 'Ivy', 'Sofia', 'Layla', 'Hazel', 'Piper'];
 
 /* ---------------- State ---------------- */
-// Your team. Edit this list when the roster changes; every new game starts with everyone marked as here.
-const TEAM = ['Zara A.', 'Marielle B.', 'Bratford', 'Abbie C.', 'Annabelle H.', 'Ella K.', 'Ella M.', 'Baily M.',
-  'Grace M.', 'Cameron O.', 'Aurelia P.', 'Cici R.', 'Katie S.', 'Brooklyn S.', 'Lucille S.', 'Olivia W.'];
+// The roster lives on the device, not in the code: S.team is the saved team list ({ name, prefs } per player). Every new game starts with
+// everyone on it marked as here. While you're on the setup screen S.team follows the player list (see save()); late arrivals added
+// mid-game are for that game only.
+const teamOf = players => players.map(p => ({ name: p.name, prefs: p.prefs.slice() }));
 
-const fresh = () => withTeam({
-  v: 1, seeded: 1, phase: 'setup', nextId: 1, players: [], stats: {},
+const fresh = (team = []) => withTeam({
+  v: 1, phase: 'setup', nextId: 1, players: [], stats: {}, team,
   settings: { formation: '4-3-3', halfMin: 35, subMin: 5, autoStart: false, color: COLORS[0], kitv: 2 },
   lineup: Array(11).fill(null), half: 1, halfState: 'ready', clockMs: 0, lastTick: Date.now(),
   sub: { state: 'idle', ms: 0, silenced: false }, halfAlerted: false, history: [], goalies: {}, gameMs: 0
 });
 function withTeam(s) {
-  for (const name of TEAM) { const id = 'p' + s.nextId++; s.players.push({ id, name, present: true, prefs: [] }); s.stats[id] = { played: 0, bench: 0 }; }
+  for (const t of s.team) { const id = 'p' + s.nextId++; s.players.push({ id, name: t.name, present: true, prefs: (t.prefs || []).slice() }); s.stats[id] = { played: 0, bench: 0 }; }
   return s;
 }
 
@@ -51,15 +52,15 @@ function load() {
     const saved = JSON.parse(raw), s = Object.assign(fresh(), saved);
     s.settings = Object.assign(fresh().settings, s.settings);
     if (!saved.settings || saved.settings.kitv !== 2) { s.settings.color = COLORS[0]; s.settings.kitv = 2; } // team kit is neon green
-    // Saved by an older build (empty or sample roster): load the team once, unless a game is already under way.
-    if (!saved.seeded) { s.seeded = 1; if (s.phase === 'setup') { s.players = []; s.stats = {}; s.nextId = 1; withTeam(s); } }
+    // Saved by a build that kept the roster in the code: the players already on this device become the saved team.
+    if (!Array.isArray(saved.team)) s.team = teamOf(s.players);
     // A game left "running" longer than a locked phone plausibly stays asleep means the app was closed; resume paused rather than inventing time.
     if (s.halfState === 'running' && Date.now() - s.lastTick > STALE_MS) s.halfState = 'paused';
     if (s.halfState !== 'running') s.lastTick = Date.now();
     return s;
   } catch (e) { return null; }
 }
-function save() { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* private mode: keep playing */ } }
+function save() { if (S.phase === 'setup') S.team = teamOf(S.players); try { localStorage.setItem(KEY, JSON.stringify(S)); } catch (e) { /* private mode: keep playing */ } }
 function commit() { save(); render(); }
 
 /* ---------------- Helpers ---------------- */
@@ -479,16 +480,17 @@ function toast(msg, withUndo) {
 /* ---------------- Actions ---------------- */
 const H = {
   // setup
-  restoreTeam() {
-    const have = new Set(S.players.map(p => p.name));
-    addPlayers(TEAM.filter(n => !have.has(n))); S.players.forEach(p => { if (TEAM.includes(p.name)) p.present = true; }); hideToast(); commit();
-  },
+  restoreTeam() { S.players.forEach(p => { p.present = true; }); hideToast(); commit(); }, // everyone on the list is here
   sample() { addPlayers(SAMPLE); const find = n => S.players.find(p => p.name === n); find('Hazel').prefs = ['GK']; find('Piper').prefs = ['GK', 'DEF']; find('Ava').prefs = ['FWD']; commit(); },
   pasteToggle() { UI.paste = !UI.paste; commit(); },
   togglePresent(t) { const p = P(t.dataset.pid); p.present = !p.present; commit(); },
   openPrefs(t) { UI.openPrefs = UI.openPrefs === t.dataset.pid ? null : t.dataset.pid; commit(); },
   togglePref(t) { const p = P(t.dataset.pid), r = t.dataset.role; p.prefs = p.prefs.includes(r) ? p.prefs.filter(x => x !== r) : p.prefs.concat(r); commit(); },
-  remove(t) { const id = t.dataset.pid; S.players = S.players.filter(p => p.id !== id); delete S.stats[id]; commit(); },
+  async remove(t) { // takes the player off the saved team, so ask first (to skip for one game, tap the name to mark absent)
+    const id = t.dataset.pid, p = P(id); if (!p) return;
+    if (!(await ask({ title: `Remove ${p.name}?`, body: 'This takes the name off your saved team list. To skip them for just today, tap the name to mark them absent instead.', ok: 'Remove', danger: true }))) return;
+    S.players = S.players.filter(q => q.id !== id); delete S.stats[id]; if (UI.openPrefs === id) UI.openPrefs = null; commit();
+  },
   setFormation(t) { changeFormation(t.dataset.f); },
   setSubMin(t) { S.settings.subMin = +t.dataset.n; commit(); },
   halfUp() { S.settings.halfMin = Math.min(60, S.settings.halfMin + 5); commit(); },
@@ -616,8 +618,8 @@ const H = {
   closeMenu(t, e) { if (e.target.closest('[data-stop]') && t.classList.contains('scrim')) return; UI.menu = false; renderSheet(); },
   async newGame() {
     UI.menu = false;
-    if (!(await ask({ title: 'Start a new game?', body: 'This clears the roster, lineup and minutes played.', ok: 'Clear everything', danger: true }))) { render(); return; }
-    const keep = S.settings; S = fresh(); S.settings = keep; UI.sel = null; UI.pending = []; hideToast(); save(); render();
+    if (!(await ask({ title: 'Start a new game?', body: 'This clears the lineup and minutes played. Your team list is kept.', ok: 'Start new game', danger: true }))) { render(); return; }
+    const keep = S.settings; S = fresh(S.team); S.settings = keep; UI.sel = null; UI.pending = []; hideToast(); save(); render();
   },
   dlgYes() { const d = UI.dlg; UI.dlg = null; renderSheet(); d.res(true); },
   dlgNo() { const d = UI.dlg; UI.dlg = null; renderSheet(); d.res(false); }

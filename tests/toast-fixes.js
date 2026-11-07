@@ -14,6 +14,7 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   const phase = () => page.evaluate(() => window.__subBoard.state.phase);
   const queueSub = async spot => { const b = await page.$eval('.bcard[data-act=bench]', e => e.dataset.pid); await tap(`.bcard[data-pid="${b}"]`); await tap(`.tok[data-i="${spot}"]`); await tap('[data-act=confirmSubs]'); };
 
+  await tap('[data-act=sample]'); // the roster is no longer built in: load the sample one
   await tap('[data-act=toLineup]'); await tap('[data-act=autofill]'); await tap('[data-act=kickoff]'); await wait(400);
 
   // --- 2. time-up fires while the ••• menu is open -> no toast over the menu
