@@ -4,7 +4,7 @@ Three headless-Chrome scripts that drive the served app and print `PASS` / `FAIL
 
 - `toast-fixes.js` — the toast sits 8 px above the dock and stays centred over it, is skipped while the ••• menu is open, auto-hides, and is cleared by New game and Reset to full team.
 - `toast-taps.js` — the toast ignores pointer events, so taps reach the bench cards under it; only its Undo button takes taps. Where the toast doesn't overlap the bench (phone landscape, iPad) it prints `N/A` for the tap-through step.
-- `formation-pick.js` — the formation chip on the pitch switches formation mid-half: the list opens on top of the players, the switch keeps the goalie, the players on the field and any queued sub, the toast offers Undo (which restores formation and lineup), and taps on the pitch or the dock close the list.
+- `formation-pick.js` — the formation chip on the pitch switches formation mid-half: the list opens on top of the players, the switch keeps the goalie, the players on the field and any queued sub, the toast offers Undo (which restores formation and lineup), and taps on the pitch or the dock close the list. It then ends the half and repeats the switch on the lineup screen before the 2nd-half kickoff: the empty goalie spot stays empty (no outfield player is dropped in goal), the players stay the same, and once a keeper is picked a further switch keeps them in goal.
 
 ## Setup
 

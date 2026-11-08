@@ -647,7 +647,8 @@ function changeFormation(f) {
   const nl = Array(11).fill(null);
   FORMATIONS[f].forEach((s, i) => { if (pool[s[0]].length) nl[i] = pool[s[0]].shift(); });
   const left = [].concat(...ROLES.map(r => pool[r]));
-  nl.forEach((v, i) => { if (!v && left.length) nl[i] = left.shift(); });
+  // Leftovers never land in goal: an empty GK spot (as at halftime) stays empty so the coach still picks the keeper.
+  nl.forEach((v, i) => { if (i && !v && left.length) nl[i] = left.shift(); });
   // Queued subs are keyed by player id, so they survive the reshuffle; the GK slot (0) maps to itself in every formation.
   S.lineup = nl; UI.sel = null; syncGoalie();
   commit();

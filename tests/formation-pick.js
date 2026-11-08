@@ -47,6 +47,30 @@ const wait = ms => new Promise(r => setTimeout(r, ms));
   await tap('[data-act=fmToggle]'); await tap('.dock [data-act=more]');
   ok('tap on the dock closes the list', !(await listOpen()));
 
+  // halftime: the lineup screen before the 2nd-half kickoff, where the goalie spot starts empty
+  await tap('[data-act=more]'); await tap('[data-fn=endHalf]'); await tap('[data-act=dlgYes]'); await wait(300);
+  const ht = await state();
+  ok('2nd half lineup screen, goalie spot empty', ht.half === 2 && ht.halfState === 'ready' && !ht.lineup[0]);
+  await tap('[data-act=fmToggle]');
+  ok('chip opens the list before the 2nd-half kickoff', await listOpen());
+  await tap('[data-act=pickFormation][data-f="3-5-2"]');
+  const h2 = await state();
+  ok('formation switched at halftime', h2.settings.formation === '3-5-2', h2.settings.formation);
+  ok('goalie spot stays empty (no outfield player dropped in goal)', !h2.lineup[0], h2.lineup[0]);
+  ok('same players on the field at halftime', h2.lineup.filter(Boolean).sort().join() === ht.lineup.filter(Boolean).sort().join());
+  ok('HUD still asks for a goalie', await page.$eval('.hud', e => /pick a goalie/i.test(e.textContent)));
+
+  // pick a 2nd-half goalie from the bench, then switch again: the keeper stays in goal
+  const gk = await page.$eval('.bcard[data-act=bench]', e => e.dataset.pid);
+  await tap(`.bcard[data-pid="${gk}"]`); await tap('.tok[data-i="0"]');
+  ok('goalie placed', (await state()).lineup[0] === gk);
+  await tap('[data-act=fmToggle]'); await tap('[data-act=pickFormation][data-f="4-2-3-1"]');
+  const h3 = await state();
+  ok('switch with a goalie in place keeps the goalie', h3.settings.formation === '4-2-3-1' && h3.lineup[0] === gk);
+  await tap('#toast button');
+  const h4 = await state();
+  ok('Undo at halftime restores formation and lineup', h4.settings.formation === '3-5-2' && h4.lineup[0] === gk);
+
   ok('no page errors', errs.length === 0, JSON.stringify(errs));
   await browser.close();
 })().catch(e => { console.log('ERR', e.message); process.exit(1); });
