@@ -42,7 +42,7 @@ function withTeam(s) {
 }
 
 let S = load() || fresh();
-const UI = { openPrefs: null, sel: null, pending: [], menu: false, more: false, paste: false, focusAdd: false, dlg: null };
+const UI = { openPrefs: null, sel: null, pending: [], menu: false, more: false, fm: false, paste: false, focusAdd: false, dlg: null };
 let needsRender = false, lastSave = 0, lastDueBeep = 0, drag = null, suppressClickUntil = 0;
 
 function load() {
@@ -393,12 +393,19 @@ function gameHTML() {
   const benchHint = immediate() ? 'Drag or tap a player to a spot' : 'Longest wait first';
   const legend = immediate() ? '' : '<span class="legend"><i style="background:var(--owed)"></i>behind<i style="background:var(--ahead)"></i>ahead</span>';
   return `<div class="game">${hudHTML()}
-    <div class="pitchwrap"><div class="pitch">${pitchSVG()}${field}</div></div>
+    <div class="pitchwrap${UI.fm ? ' fmopen' : ''}"><div class="pitch">${pitchSVG()}${field}${formationPick()}</div></div>
     <div class="side">${trayHTML()}
       <div class="benchbox"><div class="benchhead"><span>Bench (${benchPlayers().length})</span><small>${benchHint}${legend}</small></div>
         <div class="bgrid${benchPlayers().length > 5 ? ' many' : ''}">${bench}<button class="bcard late" data-act="lateOpen">+ Late arrival</button></div></div>
       ${dockHTML()}</div>
-    ${UI.more ? '<div class="morescrim" data-act="closeMore"></div>' : ''}</div>`;
+    ${UI.more ? '<div class="morescrim" data-act="closeMore"></div>' : ''}${UI.fm ? '<div class="fmscrim" data-act="fmClose"></div>' : ''}</div>`;
+}
+
+// Formation chip in the pitch corner: one tap opens the list, one more switches, before kickoff or mid-half.
+function formationPick() {
+  const list = UI.fm ? `<div class="fmlist" role="menu" aria-label="Formation">${Object.keys(FORMATIONS).map(f =>
+    `<button data-act="pickFormation" data-f="${f}" aria-pressed="${f === S.settings.formation}">${f}</button>`).join('')}</div>` : '';
+  return `${UI.fm ? '<div class="fmscrim in" data-act="fmClose"></div>' : ''}<div class="fmpick"><button class="fmchip" data-act="fmToggle" aria-expanded="${UI.fm}" aria-label="Formation ${S.settings.formation}, tap to change">${S.settings.formation} ▾</button>${list}</div>`;
 }
 
 function pitchSVG() {
@@ -491,6 +498,13 @@ const H = {
     S.players = S.players.filter(q => q.id !== id); delete S.stats[id]; if (UI.openPrefs === id) UI.openPrefs = null; commit();
   },
   setFormation(t) { changeFormation(t.dataset.f); },
+  fmToggle() { UI.fm = !UI.fm; UI.sel = null; render(); },
+  fmClose() { UI.fm = false; render(); },
+  pickFormation(t) {
+    const f = t.dataset.f, was = S.settings.formation; UI.fm = false;
+    if (f === was) { render(); return; }
+    changeFormation(f); toast(`Switched to ${f}`, true);
+  },
   setSubMin(t) { S.settings.subMin = +t.dataset.n; commit(); },
   halfUp() { S.settings.halfMin = Math.min(60, S.settings.halfMin + 5); commit(); },
   halfDown() { S.settings.halfMin = Math.max(10, S.settings.halfMin - 5); commit(); },
@@ -634,7 +648,8 @@ function changeFormation(f) {
   FORMATIONS[f].forEach((s, i) => { if (pool[s[0]].length) nl[i] = pool[s[0]].shift(); });
   const left = [].concat(...ROLES.map(r => pool[r]));
   nl.forEach((v, i) => { if (!v && left.length) nl[i] = left.shift(); });
-  S.lineup = nl; UI.sel = null; UI.pending = [];
+  // Queued subs are keyed by player id, so they survive the reshuffle; the GK slot (0) maps to itself in every formation.
+  S.lineup = nl; UI.sel = null; syncGoalie();
   commit();
 }
 
@@ -700,7 +715,7 @@ async function performDrop(src, tgt) {
   }
 }
 document.addEventListener('pointerdown', e => {
-  if (S.phase !== 'game' || UI.dlg || UI.menu || drag) return;
+  if (S.phase !== 'game' || UI.dlg || UI.menu || UI.fm || drag) return;
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   const t = e.target.closest('[data-act=spot],[data-act=bench]'); if (!t) return;
   const kind = t.dataset.act === 'bench' ? 'bench' : 'spot';
