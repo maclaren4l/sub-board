@@ -158,8 +158,8 @@ input, textarea { font: inherit; font-size: 16px; color: var(--ink); -webkit-use
 .pitchwrap { flex: 1; container-type: size; min-height: 0; display: grid; place-items: center; }
 .pitch {
   position: relative; border-radius: 26px; overflow: hidden;
-  width: min(100cqw, calc(100cqh * .78)); height: min(100cqh, calc(100cqw / .78));
-  --pw: min(100cqw, calc(100cqh * .78)); --ph: min(100cqh, calc(100cqw / .78));
+  width: min(100cqw, calc(100cqh * .975)); height: min(100cqh, calc(100cqw / .975));
+  --pw: min(100cqw, calc(100cqh * .975)); --ph: min(100cqh, calc(100cqw / .975));
   --d: clamp(36px, min(calc(var(--pw) * .15), calc(var(--ph) * .11)), 70px);
   background:
     radial-gradient(120% 90% at 50% 38%, rgba(255,255,255,.12), rgba(0,0,0,.30) 100%),

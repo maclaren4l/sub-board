@@ -402,13 +402,12 @@ function gameHTML() {
 }
 
 function pitchSVG() {
-  return `<svg viewBox="0 0 78 100" aria-hidden="true">
-    <rect x="2" y="2" width="74" height="96"/><line x1="2" y1="50" x2="76" y2="50"/>
-    <circle cx="39" cy="50" r="9"/><circle class="dot" cx="39" cy="50" r=".8"/>
-    <rect x="22" y="2" width="34" height="16"/><rect x="31" y="2" width="16" height="6"/>
-    <path d="M31.5 18 A9 9 0 0 0 46.5 18"/>
-    <rect x="22" y="82" width="34" height="16"/><rect x="31" y="92" width="16" height="6"/>
-    <path d="M31.5 82 A9 9 0 0 1 46.5 82"/></svg>`;
+  // Our half only: the top edge is the halfway line (with the near side of the centre circle), our goal is at the bottom.
+  return `<svg viewBox="0 0 78 80" aria-hidden="true">
+    <rect x="2" y="2" width="74" height="76"/>
+    <path d="M30 2 A9 9 0 0 0 48 2"/><circle class="dot" cx="39" cy="2" r=".8"/>
+    <rect x="22" y="56" width="34" height="22"/><rect x="31" y="70" width="16" height="8"/>
+    <path d="M31.5 56 A9 9 0 0 1 46.5 56"/></svg>`;
 }
 
 function summaryHTML() {
