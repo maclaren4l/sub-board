@@ -1,9 +1,10 @@
-# Toast checks
+# UI checks
 
-Two headless-Chrome scripts that drive the served app and print `PASS` / `FAIL` lines (non-zero exit code on any failure):
+Three headless-Chrome scripts that drive the served app and print `PASS` / `FAIL` lines (non-zero exit code on any failure):
 
 - `toast-fixes.js` — the toast sits 8 px above the dock and stays centred over it, is skipped while the ••• menu is open, auto-hides, and is cleared by New game and Reset to full team.
 - `toast-taps.js` — the toast ignores pointer events, so taps reach the bench cards under it; only its Undo button takes taps. Where the toast doesn't overlap the bench (phone landscape, iPad) it prints `N/A` for the tap-through step.
+- `formation-pick.js` — the formation chip on the pitch switches formation mid-half: the list opens on top of the players, the switch keeps the goalie, the players on the field and any queued sub, the toast offers Undo (which restores formation and lineup), and taps on the pitch or the dock close the list.
 
 ## Setup
 
@@ -38,8 +39,12 @@ node tests/toast-fixes.js http://localhost:8000/ 1180 820
 node tests/toast-taps.js http://localhost:8000/ 393 852
 node tests/toast-taps.js http://localhost:8000/ 852 393
 node tests/toast-taps.js http://localhost:8000/ 1180 820
+
+node tests/formation-pick.js http://localhost:8000/ 393 852
+node tests/formation-pick.js http://localhost:8000/ 852 393
+node tests/formation-pick.js http://localhost:8000/ 1180 820
 ```
 
-Both scripts load the in-app sample roster first (the app has no built-in team), so they work from a fresh browser context.
+All three scripts load the in-app sample roster first (the app has no built-in team), so they work from a fresh browser context.
 
 Arguments are `[url] [width] [height]`, defaulting to `http://localhost:8000/` at 393x852. To check the published site, use `https://maclaren4l.github.io/sub-board/` as the URL. Each run takes a fresh browser context, so saved game state never carries over; `toast-fixes.js` takes about 20 s because it waits out the 9 s Undo toast.
